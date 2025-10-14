@@ -9,25 +9,25 @@ import (
 
 // 블록의 메타데이터
 type BlockHeader struct {
-	Index     int    `json:"index"`     // 블록 번호
-	Timestamp string `json:"timestamp"` // 생성 시간
-	PrevHash  string `json:"prev_hash"` // 이전 블록의 해시
+	Index      int    `json:"index"`       // 블록 번호
+	Timestamp  string `json:"timestamp"`   // 생성 시간
+	PrevHash   string `json:"prev_hash"`   // 이전 블록의 해시
 	MerkleRoot string `json:"merkle_root"` // 블록 내부 데이터의 요약 해시(머클루트)
-	Hash      string `json:"hash"`      // 현재 블록의 해시
-	Nonce     int    `json:"nonce"`     // 작업증명에 사용된 값
+	Hash       string `json:"hash"`        // 현재 블록의 해시
+	Nonce      int    `json:"nonce"`       // 작업증명에 사용된 값
 }
 
 // 머클트리용 컨텐츠 구조
 type ContentRecord struct {
 	ContentID string `json:"content_id"`
-	Data string `json:"data"`
+	Data      string `json:"data"`
 	Timestamp string `json:"timestamp"`
 }
 
 // B하나의 블록 = Header + Entries
 // 기존 Payload 구조 대신 여러 컨텐츠를 담는 형태
 type Block struct {
-	Header  BlockHeader  `json:"header"`
+	Header  BlockHeader     `json:"header"`
 	Entries []ContentRecord `json:"entries"`
 }
 
@@ -50,17 +50,17 @@ func calculateHash(block Block) string {
 func newBlock(index int, prevHash string, data string) Block {
 	entry := ContentRecord{
 		ContentID: "rec_" + strconv.Itoa(index),
-		Data :	data,
+		Data:      data,
 		Timestamp: time.Now().Format(time.RFC3339),
-
+	}
 
 	block := Block{
 		Header: BlockHeader{
-			Index:     index,
-			Timestamp: time.Now().Format(time.RFC3339),
-			PrevHash:  prevHash,
-			MerkleRoot: "" // Merkle 계산 후에 업데이트
-			Nonce:     0, // Nonce 계산 후에 업데이트
+			Index:      index,
+			Timestamp:  time.Now().Format(time.RFC3339),
+			PrevHash:   prevHash,
+			MerkleRoot: "", // Merkle 계산 후에 업데이트
+			Nonce:      0,  // Nonce 계산 후에 업데이트
 		},
 		Entries: []ContentRecord{entry},
 	}
