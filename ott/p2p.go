@@ -2,7 +2,7 @@ package main
 
 import (
 	"encoding/json"
-	"io/ioutil"
+	"io"
 	"log"
 	"net/http"
 	"strings"
@@ -20,46 +20,67 @@ func broadcastBlock(block Block) {
 	defer peerMu.Unlock()
 
 	data, _ := json.Marshal(block)
+
 	for _, peer := range peers {
 		url := "http://" + peer + "/receive"
 		go func(peerURL string) {
-			_, err := http.Post(peerURL, "application/json", strings.NewReader(string(data)))
+			resp, err := http.Post(peerURL, "application/json", strings.NewReader(string(data)))
 			if err != nil {
 				log.Printf("[P2P] Failed to send block to %s: %v\n", peerURL, err)
-			} else {
-				log.Printf("[P2P] Block broadcasted to %s\n", peerURL)
+				return
 			}
+			io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+			log.Printf("[P2P] Block broadcasted to %s\n", peerURL)
+
 		}(url)
 	}
 }
 
-// receiveBlock : 다른 노드가 전송한 블록 수신
-// Geth의 "Block Propagation → validate → add to chain" 개념 참고
+// 다른 노드가 채굴한 신규 블록 수신
+// - 외부 노드가 새 블록을 POST하면 실행됨
+// - 새 블록이 유효한지 검증 (Index, PrevHash, MerkleRoot, PoW)
+// - 검증 통과 시 blockchain에 append
 func receiveBlock(w http.ResponseWriter, r *http.Request) {
 	var newBlock Block
-	body, _ := ioutil.ReadAll(r.Body)
-	json.Unmarshal(body, &newBlock)
+	if err := json.NewDecoder(r.Body).Decode(&newBlock); err != nil {
+		http.Error(w, "invalid block data", http.StatusBadRequest)
+		return
+	}
 
 	mu.Lock()
-	oldBlock := blockchain[len(blockchain)-1]
+	lastBlock := blockchain[len(blockchain)-1]
 	mu.Unlock()
 
-	if validateBlock(newBlock, oldBlock) && validatePoW(newBlock) {
+	// 블록 유효성 검증 (순서 + PoW + MerkleRoot)
+	if validateBlock(newBlock, lastBlock) && validatePoW(newBlock) {
 		mu.Lock()
 		blockchain = append(blockchain, newBlock)
 		saveBlockToDB(newBlock)
 		updateHashTable(newBlock)
 		mu.Unlock()
-		log.Printf("[P2P] Block received and added: #%d (Hash=%s)\n", newBlock.Header.Index, newBlock.Header.Hash)
 
-		// 추가로, 새 블록을 다른 피어들에게도 전파 (gossip 방식)
+		log.Printf("[P2P] Block received and added: #%d | Hash=%s | Entries=%d\n",
+			newBlock.Header.Index, newBlock.Header.Hash, len(newBlock.Entries))
+
+		// gossip 방식으로 다른 피어에게도 재전파
 		go broadcastBlock(newBlock)
+
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("block accepted"))
 	} else {
 		log.Println("[P2P] Invalid block received, discarded")
+		http.Error(w, "invalid block", http.StatusBadRequest)
 	}
 }
 
-// syncChain : 새 노드가 부트노드 또는 다른 노드에게 전체 체인 요청
+// ------------------------------------------------------------
+// 새 노드가 기존 네트워크 노드로부터 전체 체인 동기화
+// ------------------------------------------------------------
+// - 연결된 피어 중 하나에게 GET /chain 요청
+// - 내 체인보다 길고 유효하면 교체
+// - validateBlock()을 순차적으로 호출하여 체인 무결성 검증
+// ------------------------------------------------------------
 func syncChain(peer string) {
 	url := "http://" + peer + "/chain"
 	resp, err := http.Get(url)
@@ -70,12 +91,28 @@ func syncChain(peer string) {
 	defer resp.Body.Close()
 
 	var peerChain []Block
-	json.NewDecoder(resp.Body).Decode(&peerChain)
-
-	mu.Lock()
-	if len(peerChain) > len(blockchain) && validateBlock(peerChain[0], blockchain[0]) {
-		blockchain = peerChain
-		log.Printf("[P2P] Chain synced from %s (length=%d)\n", peer, len(peerChain))
+	if err := json.NewDecoder(resp.Body).Decode(&peerChain); err != nil {
+		log.Printf("[P2P] Invalid chain data from %s: %v\n", peer, err)
+		return
 	}
-	mu.Unlock()
+
+	// 유효성 검증 및 길이 비교
+	mu.Lock()
+	defer mu.Unlock()
+
+	if len(peerChain) <= len(blockchain) {
+		log.Printf("[P2P] Local chain already up-to-date (local=%d, peer=%d)\n",
+			len(blockchain), len(peerChain))
+		return
+	}
+
+	for i := 1; i < len(peerChain); i++ {
+		if !validateBlock(peerChain[i], peerChain[i-1]) {
+			log.Printf("[P2P] Invalid block at index %d from %s, aborting sync\n", i, peer)
+			return
+		}
+	}
+
+	blockchain = peerChain
+	log.Printf("[P2P] Chain synced from %s (length=%d)\n", peer, len(peerChain))
 }

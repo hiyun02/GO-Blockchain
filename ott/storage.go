@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 
 	"github.com/syndtr/goleveldb/leveldb"
 )
@@ -11,7 +12,7 @@ import (
 // 전역 DB 핸들
 var db *leveldb.DB
 
-// initDB : LevelDB 초기화
+// LevelDB 객체 초기화
 func initDB(path string) {
 	var err error
 	db, err = leveldb.OpenFile(path, nil)
@@ -21,15 +22,15 @@ func initDB(path string) {
 	log.Println("[DB] LevelDB initialized at", path)
 }
 
-// closeDB : LevelDB 닫기
+// LevelDB 객체 닫기
 func closeDB() {
 	db.Close()
 	log.Println("[DB] Closed LevelDB")
 }
 
-// saveBlockToDB : 블록을 LevelDB에 저장
-// - Key1: "block_<Index>" → 블록 전체 JSON
-// - Key2: "hash_<BlockHash>" → 블록 전체 JSON
+// 블록을 LevelDB에 저장
+// - Key1: "block_<Index>" => 블록 전체 JSON
+// - Key2: "hash_<BlockHash>" => 블록 전체 JSON
 func saveBlockToDB(block Block) {
 	data, _ := json.Marshal(block)
 
@@ -44,17 +45,42 @@ func saveBlockToDB(block Block) {
 	log.Printf("[DB] Block #%d saved (Hash=%s)\n", block.Header.Index, block.Header.Hash)
 }
 
-// updateHashTable : 해시테이블(검색 인덱스) 저장
-// 예: "payload_<Data>" → BlockHash
+// ------------------------------------------------------------
+// 블록 내 각 컨텐츠(ContentRecord) 검색 HashTable 저장
+// ------------------------------------------------------------
+// Key-Value 예시:
+//
+//	"cid_<ContentID>"  => BlockHash (컨텐츠 ID 기반)
+//	"fp_<Fingerprint>" => BlockHash	(Fingerprint 기반)
+//	"info_<keyword>"   => BlockHash (제목, 카테고리 등 메타데이터 기반)
+//
+// ------------------------------------------------------------
 func updateHashTable(block Block) {
-	key := fmt.Sprintf("payload_%s", block.Payload.Data)
-	value := block.Header.Hash
-	db.Put([]byte(key), []byte(value), nil)
+	for _, entry := range block.Entries {
+		// 컨텐츠 ID 기반 Hash 검색
+		keyByCID := fmt.Sprintf("cid_%s", entry.ContentID)
+		db.Put([]byte(keyByCID), []byte(block.Header.Hash), nil)
 
-	log.Printf("[DB] HashTable updated: %s → %s\n", key, value)
+		// Fingerprint 기반 Hash 검색
+		keyByFP := fmt.Sprintf("fp_%s", entry.Fingerprint)
+		db.Put([]byte(keyByFP), []byte(block.Header.Hash), nil)
+
+		// 메타데이터 Key-Value 기반 단순 텍스트
+		for k, v := range entry.Info {
+			if v == "" {
+				continue
+			}
+			key := fmt.Sprintf("info_%s_%s", k, strings.ToLower(v))
+			db.Put([]byte(key), []byte(block.Header.Hash), nil)
+		}
+	}
+	log.Printf("[DB] Hash index updated for Block #%d (%d entries)\n",
+		block.Header.Index, len(block.Entries))
 }
 
-// getBlockByIndex : 인덱스로 블록 조회
+// ------------------------------------------------------------
+// 인덱스로 블록 조회
+// ------------------------------------------------------------
 func getBlockByIndex(index int) (Block, error) {
 	key := fmt.Sprintf("block_%d", index)
 	data, err := db.Get([]byte(key), nil)
@@ -66,7 +92,9 @@ func getBlockByIndex(index int) (Block, error) {
 	return block, nil
 }
 
-// getBlockByHash : 해시로 블록 조회
+// ------------------------------------------------------------
+// 블록 해시로 조회
+// ------------------------------------------------------------
 func getBlockByHash(hash string) (Block, error) {
 	key := fmt.Sprintf("hash_%s", hash)
 	data, err := db.Get([]byte(key), nil)
@@ -78,12 +106,29 @@ func getBlockByHash(hash string) (Block, error) {
 	return block, nil
 }
 
-// getBlockByPayload : 데이터(payload) 키워드로 블록 찾기
-func getBlockByPayload(data string) (Block, error) {
-	key := fmt.Sprintf("payload_%s", data)
-	hash, err := db.Get([]byte(key), nil)
-	if err != nil {
-		return Block{}, err
+// ------------------------------------------------------------
+// 컨텐츠 키워드로 블록 검색
+// ------------------------------------------------------------
+// 검색 키워드가 Info의 일부거나 ContentID, Fingerprint에 일치하면 해당 블록 반환
+// ------------------------------------------------------------
+func getBlockByContent(keyword string) (Block, error) {
+	// 컨텐츠 ID 색인 조회
+	keyCID := fmt.Sprintf("cid_%s", keyword)
+	if hash, err := db.Get([]byte(keyCID), nil); err == nil {
+		return getBlockByHash(string(hash))
 	}
-	return getBlockByHash(string(hash))
+
+	// Fingerprint 색인 조회
+	keyFP := fmt.Sprintf("fp_%s", keyword)
+	if hash, err := db.Get([]byte(keyFP), nil); err == nil {
+		return getBlockByHash(string(hash))
+	}
+
+	// Info 필드 기반 색인 조회
+	keyInfo := fmt.Sprintf("info_title_%s", strings.ToLower(keyword))
+	if hash, err := db.Get([]byte(keyInfo), nil); err == nil {
+		return getBlockByHash(string(hash))
+	}
+
+	return Block{}, fmt.Errorf("no block found for keyword: %s", keyword)
 }

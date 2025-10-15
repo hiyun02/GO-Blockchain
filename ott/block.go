@@ -4,7 +4,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"strconv"
-	"time"
 )
 
 // 블록의 메타데이터
@@ -17,14 +16,7 @@ type BlockHeader struct {
 	Nonce      int    `json:"nonce"`       // 작업증명에 사용된 값
 }
 
-// 머클트리용 컨텐츠 구조
-type ContentRecord struct {
-	ContentID string `json:"content_id"`
-	Data      string `json:"data"`
-	Timestamp string `json:"timestamp"`
-}
-
-// B하나의 블록 = Header + Entries
+// 하나의 블록 = Header + Entries
 // 기존 Payload 구조 대신 여러 컨텐츠를 담는 형태
 type Block struct {
 	Header  BlockHeader     `json:"header"`
@@ -33,6 +25,9 @@ type Block struct {
 
 // 블록의 해시값 계산
 // Index, Timestamp, Data, PrevHash, Nonce, MerkleRoot 를 모두 이용하여 SHA-256 해시 생성
+// Entries(콘텐츠 데이터)는 MerkleRoot로 간접적으로 반영됨
+// 블록 해시는 블록 간 연결(체인 구조)과 PoW 검증에 사용되고,
+// 개별 콘텐츠의 무결성은 Merkle 트리를 통해 검증됨
 func calculateHash(block Block) string {
 	record := strconv.Itoa(block.Header.Index) +
 		block.Header.Timestamp +
@@ -44,25 +39,4 @@ func calculateHash(block Block) string {
 	h.Write([]byte(record))
 	hashed := h.Sum(nil)
 	return hex.EncodeToString(hashed)
-}
-
-// 새 블록 생성 함수 (PoW 적용은 blockchain.go에서 처리)
-func newBlock(index int, prevHash string, data string) Block {
-	entry := ContentRecord{
-		ContentID: "rec_" + strconv.Itoa(index),
-		Data:      data,
-		Timestamp: time.Now().Format(time.RFC3339),
-	}
-
-	block := Block{
-		Header: BlockHeader{
-			Index:      index,
-			Timestamp:  time.Now().Format(time.RFC3339),
-			PrevHash:   prevHash,
-			MerkleRoot: "", // Merkle 계산 후에 업데이트
-			Nonce:      0,  // Nonce 계산 후에 업데이트
-		},
-		Entries: []ContentRecord{entry},
-	}
-	return block
 }
