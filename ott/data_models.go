@@ -1,9 +1,9 @@
 package main
 
 ////////////////////////////////////////////////////////////////////////////////
-// B. Data Models (데이터 스키마)
+// Data Models (데이터 스키마)
 //
-// 체인 간 교차 검증을 위해 필요한 최소 데이터 구조를 정의.
+//체인 간 교차 검증을 위해 필요한 최소 데이터 구조 정의
 // - ContentRecord  : 콘텐츠 단위 메타데이터
 // - LowerBlock     : CP 체인의 블록 구조 (Merkle Root 포함)
 // - ContractData   : CP-OTT 간 계약 정보
@@ -12,7 +12,7 @@ package main
 ////////////////////////////////////////////////////////////////////////////////
 
 ////////////////////////////////////////////////////////////////////////////////
-// 1️. ContentRecord
+// 1. ContentRecord
 // ------------------------------------------------------------
 // 개별 콘텐츠에 대한 메타데이터를 정의.
 // CP 체인에서는 콘텐츠 단위로 해시를 생성하여 Merkle 트리에 포함.
@@ -20,11 +20,11 @@ package main
 ////////////////////////////////////////////////////////////////////////////////
 
 type ContentRecord struct {
-	ContentID   string            `json:"content_id"`     // 콘텐츠 고유 ID
-	Info        map[string]string `json:"info,omitempty"` // 콘텐츠의 메타정보 (제목, 설명, 카테고리 등)
-	Fingerprint string            `json:"fingerprint"`    // 콘텐츠 파일의 해시 또는 고유 식별자
-	StorageAddr string            `json:"storage_addr"`   // 콘텐츠 저장 위치 (IPFS, S3 등)
-	DRM         *string           `json:"drm,omitempty"`  // (선택) DRM 관련 정보 (공백과 nil을 구분하기 위해 포인터로 정의)
+	ContentID   string            `json:"content_id"`     // 고유 ID
+	Info        map[string]string `json:"info,omitempty"` // 메타데이터 (제목, 설명, 카테고리 등)
+	Fingerprint string            `json:"fingerprint"`    // 컨텐츠 원본 무결성을 보장하는 해시값 (머클 트리 해싱을 위한 주요 필드)
+	StorageAddr string            `json:"storage_addr"`   // 저장 경로
+	DRM         *string           `json:"drm,omitempty"`  // (선택) DRM 관련 정보
 	Timestamp   string            `json:"timestamp"`      // 등록 시각
 }
 

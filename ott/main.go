@@ -27,7 +27,7 @@ func main() {
 	http.HandleFunc("/receive", receiveBlock)
 	http.HandleFunc("/block/index", getBlockByIndexAPI)
 	http.HandleFunc("/block/hash", getBlockByHashAPI)
-	http.HandleFunc("/block/payload", getBlockByPayloadAPI)
+	http.HandleFunc("/block/payload", getBlockByContentAPI)
 
 	log.Println("[NODE] Running on port 5000...")
 	log.Fatal(http.ListenAndServe(":5000", nil))
