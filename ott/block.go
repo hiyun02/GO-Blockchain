@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"strconv"
 	"time"
 )
@@ -15,13 +16,6 @@ type BlockHeader struct {
 	MerkleRoot string `json:"merkle_root"` // 블록 내부 데이터의 요약 해시(머클루트)
 	Hash       string `json:"hash"`        // 현재 블록의 해시
 	Nonce      int    `json:"nonce"`       // 작업증명에 사용된 값
-}
-
-// 머클트리용 컨텐츠 구조
-type ContentRecord struct {
-	ContentID string `json:"content_id"`
-	Data      string `json:"data"`
-	Timestamp string `json:"timestamp"`
 }
 
 // B하나의 블록 = Header + Entries
@@ -47,11 +41,13 @@ func calculateHash(block Block) string {
 }
 
 // 새 블록 생성 함수 (PoW 적용은 blockchain.go에서 처리)
-func newBlock(index int, prevHash string, data string) Block {
+func newBlock(index int, prevHash string, contentInfo map[string]string) Block {
 	entry := ContentRecord{
-		ContentID: "rec_" + strconv.Itoa(index),
-		Data:      data,
-		Timestamp: time.Now().Format(time.RFC3339),
+		ContentID:   fmt.Sprintf("rec_%d", index),
+		Info:        contentInfo,
+		Fingerprint: Sha256Hex([]byte(contentInfo["title"])), // 예시
+		StorageAddr: "local://dummy/path",
+		Timestamp:   time.Now().Format(time.RFC3339),
 	}
 
 	block := Block{

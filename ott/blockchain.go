@@ -34,7 +34,8 @@ func addBlock(data string) Block {
 	defer mu.Unlock()
 
 	prevBlock := blockchain[len(blockchain)-1]
-	newBlk := newBlock(prevBlock.Header.Index+1, prevBlock.Header.Hash, data)
+	var contentInfo map[string]string
+	newBlk := newBlock(prevBlock.Header.Index+1, prevBlock.Header.Hash, contentInfo)
 
 	// PoW 실행
 	hash, nonce := proofOfWork(newBlk)
