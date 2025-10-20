@@ -225,11 +225,14 @@ func (ch *LowerChain) eligibleToFinalize() (ok bool, reason string) {
 		len(ch.pending), MaxPendingEntries, size, MaxPendingBytes)
 }
 
+// 조건부 커밋: 임계치 미달시 에러 반환, force면 무시하고 커밋
+var ErrNotEligible = errors.New("not eligible to finalize")
+
 // 조건부 커밋( force=false면 임계치 미달 시 ErrNotEligible 반환
 func (ch *LowerChain) finalizeIfEligible(force bool) (LowerBlock, error) {
 	if !force {
 		if ok, _ := ch.eligibleToFinalize(); !ok {
-			return LowerBlock{}, errors.New("not eligible to finalize")
+			return LowerBlock{}, ErrNotEligible
 		}
 	}
 	return ch.finalizeBlock() // 여기엔 네가 이미 구현한 확정 로직 사용

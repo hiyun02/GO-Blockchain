@@ -252,3 +252,35 @@ func listAllBlocks() ([]LowerBlock, error) {
 	}
 	return out, nil
 }
+
+// ListBlocksPaginated : offset에서 최대 limit개 반환, total(=height+1)도 함께 반환
+func listBlocksPaginated(offset, limit int) ([]LowerBlock, int, error) {
+	if offset < 0 || limit <= 0 {
+		return nil, 0, fmt.Errorf("invalid offset/limit")
+	}
+	h, ok := getLatestHeight()
+	if !ok {
+		// 제네시스만 있는지 확인
+		if _, err := getBlockByIndex(0); err != nil {
+			return nil, 0, fmt.Errorf("no chain: %w", err)
+		}
+		h = 0
+	}
+	total := h + 1
+	if offset >= total {
+		return []LowerBlock{}, total, nil
+	}
+	end := offset + limit - 1
+	if end > h {
+		end = h
+	}
+	out := make([]LowerBlock, 0, end-offset+1)
+	for i := offset; i <= end; i++ {
+		b, err := getBlockByIndex(i)
+		if err != nil {
+			return nil, total, fmt.Errorf("load block_%d: %w", i, err)
+		}
+		out = append(out, b)
+	}
+	return out, total, nil
+}

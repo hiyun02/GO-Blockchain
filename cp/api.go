@@ -1,54 +1,201 @@
+// api.go
 package cp
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"strconv"
 )
 
-// 현재 블록체인 반환
-// GET /chain
-func getBlockchain(w http.ResponseWriter, r *http.Request) {
-	mu.Lock()
-	defer mu.Unlock()
+// JSON 헬퍼
+func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(blockchain)
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
 }
 
-// 새 블록 채굴
-// POST /mine : 새 블록 채굴 (복수 콘텐츠 등록 가능)
-// 요청 Body 예시:
-// [
-//
-//	{"title":"AI Lecture","category":"Education","storage_addr":"ipfs://hash1"},
-//	{"title":"Quantum Talk","category":"Science","storage_addr":"ipfs://hash2"}
-//
-// ]
-func mineBlock(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
+// RegisterAPI : main.go에서 mux와 LowerChain을 넘겨 핸들만 등록
+func RegisterAPI(mux *http.ServeMux, chain *LowerChain) {
+	// 1) 콘텐츠 추가 (pending 적재 + 저널 기록은 blockchain.go 내부 AddContent에서 처리)
+	// POST /content/add
+	mux.HandleFunc("/content/add", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var rec ContentRecord
+		if err := json.NewDecoder(r.Body).Decode(&rec); err != nil {
+			http.Error(w, "invalid json", http.StatusBadRequest)
+			return
+		}
+		// 최소 필수값 검증 (머클/증명 안정성)
+		if rec.ContentID == "" || rec.Fingerprint == "" || rec.StorageAddr == "" {
+			http.Error(w, "missing required fields (content_id, fingerprint, storage_addr)", http.StatusBadRequest)
+			return
+		}
+		chain.addContent(rec)
+		// pending 상태 가시성
+		cnt, bytes := chain.pendingStats()
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":     true,
+			"queued": map[string]int{"count": cnt, "bytes": bytes},
+		})
+	})
 
-	var contents []map[string]interface{}
-	if err := json.NewDecoder(r.Body).Decode(&contents); err != nil {
-		http.Error(w, "invalid JSON format", http.StatusBadRequest)
-		return
-	}
+	// 2) 블록 확정 (임계치 충족 시에만; force=true로 우회 가능)
+	// POST /block/finalize?force=true|false
+	mux.HandleFunc("/block/finalize", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		force := r.URL.Query().Get("force") == "true"
+		blk, err := chain.finalizeIfEligible(force)
+		if err != nil {
+			if err == ErrNotEligible {
+				cnt, bytes := chain.pendingStats()
+				writeJSON(w, http.StatusPreconditionFailed, map[string]any{ // 412
+					"ok":         false,
+					"reason":     "threshold_not_met",
+					"pending":    map[string]int{"count": cnt, "bytes": bytes},
+					"thresholds": map[string]int{"min_count": MaxPendingEntries, "min_bytes": MaxPendingBytes},
+					"hint":       "add more contents or call with force=true",
+				})
+				return
+			}
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "block": blk})
+	})
 
-	// 새 블록 생성
-	newBlock := addBlock(contents)
+	// 3) 최신 머클루트 (OTT 앵커용)
+	// GET /block/root
+	mux.HandleFunc("/block/root", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		root := chain.LatestRoot() // storage의 getLatestRoot 사용
+		writeJSON(w, http.StatusOK, map[string]string{"root": root})
+	})
 
-	// DB 저장
-	saveBlockToDB(newBlock)
-	updateHashTable(newBlock)
+	// 4) 블록 조회: 인덱스
+	// GET /block/index?id=<int>
+	mux.HandleFunc("/block/index", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		q := r.URL.Query().Get("id")
+		if q == "" {
+			http.Error(w, "id parameter required", http.StatusBadRequest)
+			return
+		}
+		idx, err := strconv.Atoi(q)
+		if err != nil {
+			http.Error(w, "id must be integer", http.StatusBadRequest)
+			return
+		}
+		blk, err := getBlockByIndex(idx)
+		if err != nil {
+			http.Error(w, "block not found", http.StatusNotFound)
+			return
+		}
+		writeJSON(w, http.StatusOK, blk)
+	})
 
-	log.Printf("[API] New block mined: #%d | Entries=%d | Hash=%s\n",
-		newBlock.Header.Index, len(newBlock.Entries), newBlock.Header.Hash)
+	// 5) 블록 조회: 해시
+	// GET /block/hash?value=<hash>
+	mux.HandleFunc("/block/hash", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		hash := r.URL.Query().Get("value")
+		if hash == "" {
+			http.Error(w, "value parameter required", http.StatusBadRequest)
+			return
+		}
+		blk, err := getBlockByHash(hash)
+		if err != nil {
+			http.Error(w, "block not found", http.StatusNotFound)
+			return
+		}
+		writeJSON(w, http.StatusOK, blk)
+	})
 
-	// 응답 반환
-	json.NewEncoder(w).Encode(newBlock)
+	// 6) 키워드로 블록 검색(정확 일치: cid/fp/info_title)
+	// GET /search?value=<keyword>
+	mux.HandleFunc("/search", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		kw := r.URL.Query().Get("value")
+		if kw == "" {
+			http.Error(w, "value parameter required", http.StatusBadRequest)
+			return
+		}
+		blk, err := getBlockByContent(kw)
+		if err != nil {
+			http.Error(w, "block not found", http.StatusNotFound)
+			return
+		}
+		writeJSON(w, http.StatusOK, blk)
+	})
 
-	// P2P 브로드캐스트 (다른 노드로 전파)
-	go broadcastBlock(newBlock)
+	// 7) 전체 장부 조회 (페이지네이션)
+	// GET /blocks?offset=<int>&limit=<int>
+	// storage.go에 listBlocksPaginated 추가한 버전 기준
+	mux.HandleFunc("/blocks", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+		if limit <= 0 {
+			limit = 50
+		}
+		blocks, total, err := listBlocksPaginated(offset, limit)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("list blocks error: %v", err), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"total":  total,
+			"offset": offset,
+			"limit":  limit,
+			"items":  blocks,
+		})
+	})
+
+	// 8) 머클 증명 제공 (색인 기반 즉시 접근)
+	// GET /proof?cid=<content_id>
+	mux.HandleFunc("/proof", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		cid := r.URL.Query().Get("cid")
+		if cid == "" {
+			http.Error(w, "missing query param: cid", http.StatusBadRequest)
+			return
+		}
+		rec, blk, proof, ok := chain.getContentWithProofIndexed(cid)
+		if !ok {
+			http.Error(w, "content not found", http.StatusNotFound)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"record": rec,
+			"block":  blk,
+			"proof":  proof, // [][2]string { siblingHex, "L"/"R" }
+		})
+	})
 }
 
 // 현재 노드가 알고 있는 피어 리스트 반환
@@ -76,75 +223,4 @@ func addPeer(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("[API] New peer added: %s\n", peer)
 	w.Write([]byte("Peer added"))
-}
-
-// ------------------------------------------------------------
-// 인덱스로 블록 조회
-// GET /block/index?id=<int>
-// ------------------------------------------------------------
-func getBlockByIndexAPI(w http.ResponseWriter, r *http.Request) {
-	query := r.URL.Query().Get("id")
-	if query == "" {
-		http.Error(w, "id parameter required", http.StatusBadRequest)
-		return
-	}
-
-	index, err := strconv.Atoi(query)
-	if err != nil {
-		http.Error(w, "id must be integer", http.StatusBadRequest)
-		return
-	}
-
-	block, err := getBlockByIndex(index)
-	if err != nil {
-		http.Error(w, "block not found", http.StatusNotFound)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(block)
-}
-
-// ------------------------------------------------------------
-// 블록 해시로 조회
-// GET /block/index?value=<hash>
-// ------------------------------------------------------------
-func getBlockByHashAPI(w http.ResponseWriter, r *http.Request) {
-	hash := r.URL.Query().Get("value")
-	if hash == "" {
-		http.Error(w, "value parameter required", http.StatusBadRequest)
-		return
-	}
-
-	block, err := getBlockByHash(hash)
-	if err != nil {
-		http.Error(w, "block not found", http.StatusNotFound)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(block)
-}
-
-// ------------------------------------------------------------
-// 콘텐츠 키워드 검색
-// ------------------------------------------------------------
-// GET /block/content?value=<keyword>
-// - keyword가 ContentID, Fingerprint, Info(title 등) 중 하나와 일치 시 해당 블록 반환
-// ------------------------------------------------------------
-func getBlockByContentAPI(w http.ResponseWriter, r *http.Request) {
-	keyword := r.URL.Query().Get("value")
-	if keyword == "" {
-		http.Error(w, "value parameter required", http.StatusBadRequest)
-		return
-	}
-
-	block, err := getBlockByContent(keyword)
-	if err != nil {
-		http.Error(w, "block not found", http.StatusNotFound)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(block)
 }
