@@ -1,4 +1,4 @@
-package main
+package ott
 
 import (
 	"fmt"
@@ -13,7 +13,7 @@ var mu sync.Mutex
 
 // 제네시스 블록(맨 처음 블록) 생성
 func createGenesisBlock() Block {
-	genesisInfo := map[string]string{
+	genesisInfo := map[string]interface{}{
 		"title":    "Genesis Block",
 		"category": "system",
 		"creator":  "network",
@@ -48,7 +48,7 @@ func createGenesisBlock() Block {
 // • Fingerprint는 시스템이 JSON 내용을 해싱하여 자동 생성
 // • 모든 ContentRecord 해시를 머클 트리로 결합하여 MerkleRoot 계산
 // • PoW(작업증명)를 수행해 블록 헤더의 Nonce와 Hash를 결정
-func addBlock(contents []map[string]string) Block {
+func addBlock(contents []map[string]interface{}) Block {
 	mu.Lock()
 	defer mu.Unlock()
 
@@ -64,7 +64,7 @@ func addBlock(contents []map[string]string) Block {
 			ContentID:   generateContentID(prevBlock.Header.Index, i),
 			Info:        info,
 			Fingerprint: fingerprint,
-			StorageAddr: info["storage_addr"],
+			StorageAddr: fmt.Sprintf("%v", info["storage_addr"]), // interface => string
 			Timestamp:   time.Now().Format(time.RFC3339),
 		})
 	}

@@ -1,4 +1,4 @@
-package main
+package ott
 
 import (
 	"crypto/sha256"
