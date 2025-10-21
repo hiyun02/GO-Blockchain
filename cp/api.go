@@ -1,5 +1,5 @@
 // api.go
-package cp
+package main
 
 import (
 	"encoding/json"

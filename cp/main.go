@@ -1,5 +1,5 @@
 // main.go
-package cp
+package main
 
 import (
 	"log"
