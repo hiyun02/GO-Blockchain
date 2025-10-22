@@ -235,5 +235,5 @@ func (ch *LowerChain) finalizeIfEligible(force bool) (LowerBlock, error) {
 			return LowerBlock{}, ErrNotEligible
 		}
 	}
-	return ch.finalizeBlock() // 여기엔 네가 이미 구현한 확정 로직 사용
+	return ch.finalizeBlock()
 }

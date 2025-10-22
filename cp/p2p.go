@@ -250,3 +250,77 @@ func syncChain(peer string) {
 
 	log.Printf("[P2P] Chain synced from %s (+%d blocks, new height=%d)\n", peer, appended, localH)
 }
+
+// p2p.go
+// 신규 노드가 부트노드에 자기 주소를 등록하고,
+// 현재 피어 목록을 받아가도록 하는 엔드포인트.
+type registerReq struct {
+	Addr string `json:"addr"` // "host:port" 또는 "컨테이너명:포트"
+	CpID string `json:"cp_id"`
+}
+type registerResp struct {
+	Peers []string `json:"peers"`
+}
+
+// 신규노드가 네트워크 진입 시 부트노드에게 다른 노드들의 주소를 제공받기 위한 함수
+func registerPeer(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req registerReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Addr == "" {
+		http.Error(w, "invalid body", http.StatusBadRequest)
+		return
+	}
+
+	// 체인 정체성 확인: 제네시스 cp_id와 일치해야 가입 허용
+	blk0, err := getBlockByIndex(0)
+	if err != nil || blk0.CpID != req.CpID {
+		http.Error(w, "cp_id mismatch", http.StatusForbidden)
+		return
+	}
+
+	// 부트노드 로컬 peers에 추가
+	peerMu.Lock() // 동시 접근 막음
+	already := false
+	// 이미 등록된 주소인지 검증
+	for _, p := range peers {
+		if p == req.Addr {
+			already = true
+			break
+		}
+	}
+	// 등록된 주소가 아니라면 추가
+	if !already {
+		peers = append(peers, req.Addr)
+		log.Printf("[P2P][REGISTER] new peer joined: %s (cp_id=%s) | total=%d", req.Addr, req.CpID, len(peers))
+	} else {
+		log.Printf("[P2P][REGISTER] peer already exists: %s", req.Addr)
+	}
+	// 응답으로 넘겨줄 피어목록을 만듦 (자기 자신은 제외)
+	out := make([]string, 0, len(peers))
+	for _, p := range peers {
+		if p != req.Addr {
+			out = append(out, p)
+		}
+	}
+	peerMu.Unlock()
+
+	// 기존 피어들에게도 새 피어 알려주기(비동기)
+	go func(newPeer string, others []string) {
+		log.Printf("[P2P][REGISTER] notifying %d existing peers about %s", len(others), newPeer)
+		b, _ := json.Marshal(newPeer)
+		for _, op := range others {
+			_, _ = http.Post("http://"+op+"/addPeer", "application/json", strings.NewReader(string(b)))
+			if err != nil {
+				log.Printf("[P2P][REGISTER] notify failed to %s: %v", op, err)
+			}
+		}
+	}(req.Addr, out)
+
+	// 신규 노드에게 현재 피어 목록을 응답
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(registerResp{Peers: out})
+}

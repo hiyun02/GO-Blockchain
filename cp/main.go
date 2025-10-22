@@ -2,17 +2,23 @@
 package main
 
 import (
+	"encoding/json"
+	"io"
 	"log"
 	"net/http"
 	"os"
+	"strings"
 )
 
 func main() {
-	// 1) 설정값 (환경변수 → 기본값)
+	// 1) 설정값 (환경변수 혹은 기본값 사용)
 	dbPath := getenvDefault("CP_DB_PATH", "blockchain_db")
 	cpID := getenvDefault("CP_ID", "CP-A")
 	addr := getenvDefault("PORT", "5000")
 	addr = ":" + addr
+
+	boot := getenvDefault("BOOTSTRAP_ADDR", "") // 부트노드 고정주소
+	self := getenvDefault("NODE_ADDR", "")      // 이 노드의 외부접속 주소
 
 	// 2) DB 초기화
 	initDB(dbPath)
@@ -28,11 +34,9 @@ func main() {
 
 	// 4) HTTP 라우팅 등록
 	mux := http.NewServeMux()
-
-	// (A) CP 체인 API (확정형): /content/add, /block/finalize, /block/root, /blocks, /block/index, /block/hash, /search, /proof
+	// CP 체인 API (확정형): /content/add, /block/finalize, /block/root, /blocks, /block/index, /block/hash, /search, /proof
 	RegisterAPI(mux, chain)
-
-	// (B) P2P 관련 엔드포인트 유지
+	// P2P 엔드포인트
 	//     - /peers : 피어 목록 조회
 	//     - /addPeer : 피어 추가
 	//     - /receive : 다른 노드가 보낸 확정 블록 수신
@@ -40,12 +44,61 @@ func main() {
 	mux.HandleFunc("/addPeer", addPeer)
 	mux.HandleFunc("/receive", receiveBlock)
 
-	// (C) (선택) 구버전 호환 라우트 유지하고 싶으면 주석 해제
-	// mux.HandleFunc("/block/payload", getBlockByContentAPI) // = /search
+	// 부트스트랩 등록 엔드포인트
+	mux.HandleFunc("/register", registerPeer)
 
-	// 5) 서버 시작
-	log.Println("[NODE] Running on", addr)
-	log.Fatal(http.ListenAndServe(addr, mux))
+	// 5) 서버 시작 (고루틴으로 실행해 메인 Go 루틴이 계속 진행되도록)
+	go func() {
+		log.Println("[NODE] Running on", addr)
+		if err := http.ListenAndServe(addr, mux); err != nil {
+			log.Fatal(err)
+		}
+	}()
+
+	// 6) 자동 부트스트랩: 부트노드에 등록 -> 피어 목록 받아 로컬 등록 -> 초기 동기화
+	//    (부트노드 자신은 BOOTSTRAP_ADDR를 비우거나 자기 주소로 두고, 여기서 스킵돼도 무방)
+	if boot != "" && self != "" {
+		go func() {
+			payload := map[string]string{"addr": self, "cp_id": cpID}
+			b, _ := json.Marshal(payload)
+
+			resp, err := http.Post("http://"+boot+"/register", "application/json", strings.NewReader(string(b)))
+			if err != nil {
+				log.Printf("[BOOT] register failed: %v", err)
+				return
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != http.StatusOK {
+				body, _ := io.ReadAll(resp.Body)
+				log.Printf("[BOOT] register status=%d body=%s", resp.StatusCode, string(body))
+				return
+			}
+
+			var out struct {
+				Peers []string `json:"peers"`
+			}
+			if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+				log.Printf("[BOOT] decode peers failed: %v", err)
+				return
+			}
+
+			// 받은 피어들을 내 노드에 addPeer (HTTP로 자기 자신에 호출)
+			for _, p := range out.Peers {
+				bp, _ := json.Marshal(p)
+				_, _ = http.Post("http://"+self+"/addPeer", "application/json", strings.NewReader(string(bp)))
+			}
+
+			// 초기 체인 동기화(부트노드로부터)
+			go syncChain(boot)
+			log.Printf("[BOOT] joined via %s; peers=%v", boot, out.Peers)
+		}()
+	} else {
+		log.Println("[BOOT] skipping auto-join (BOOTSTRAP_ADDR or NODE_ADDR empty)")
+	}
+
+	// 7) 메인 Go 루틴 유지
+	select {}
 }
 
 func getenvDefault(k, def string) string {
