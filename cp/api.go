@@ -4,7 +4,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"strconv"
 )
@@ -35,8 +34,9 @@ func RegisterAPI(mux *http.ServeMux, chain *LowerChain) {
 			http.Error(w, "missing required fields (content_id, fingerprint, storage_addr)", http.StatusBadRequest)
 			return
 		}
+		// 컨텐츠 데이터 검증 후 blockchain pending 추가 작업 실행
 		chain.addContent(rec)
-		// pending 상태 가시성
+		// pending 상태 시각화
 		cnt, bytes := chain.pendingStats()
 		writeJSON(w, http.StatusOK, map[string]any{
 			"ok":     true,
@@ -198,29 +198,22 @@ func RegisterAPI(mux *http.ServeMux, chain *LowerChain) {
 	})
 }
 
-// 현재 노드가 알고 있는 피어 리스트 반환
-// GET /peers
-func getPeers(w http.ResponseWriter, r *http.Request) {
-	peerMu.Lock()
-	defer peerMu.Unlock()
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(peers)
-}
-
 // 새로운 피어 등록
-// POST /addPeer (Body: "ip:port")
 func addPeer(w http.ResponseWriter, r *http.Request) {
-	var peer string
-	if err := json.NewDecoder(r.Body).Decode(&peer); err != nil {
+	var addr string
+	if err := json.NewDecoder(r.Body).Decode(&addr); err != nil {
 		http.Error(w, "invalid peer format", http.StatusBadRequest)
 		return
 	}
+	if addPeerInternal(addr) {
+		w.Write([]byte("Peer added"))
+	} else {
+		w.Write([]byte("Peer exists"))
+	}
+}
 
-	peerMu.Lock()
-	peers = append(peers, peer)
-	peerMu.Unlock()
-
-	log.Printf("[API] New peer added: %s\n", peer)
-	w.Write([]byte("Peer added"))
+// 현재 노드가 알고 있는 피어 리스트 반환
+func getPeers(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(peersSnapshot()) // 빈이어도 "[]"
 }

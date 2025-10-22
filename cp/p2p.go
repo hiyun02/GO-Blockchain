@@ -284,14 +284,9 @@ func registerPeer(w http.ResponseWriter, r *http.Request) {
 
 	// 부트노드 로컬 peers에 추가
 	peerMu.Lock() // 동시 접근 막음
-	already := false
 	// 이미 등록된 주소인지 검증
-	for _, p := range peers {
-		if p == req.Addr {
-			already = true
-			break
-		}
-	}
+	already := checkAddress(req.Addr)
+
 	// 등록된 주소가 아니라면 추가
 	if !already {
 		peers = append(peers, req.Addr)
@@ -323,4 +318,41 @@ func registerPeer(w http.ResponseWriter, r *http.Request) {
 	// 신규 노드에게 현재 피어 목록을 응답
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(registerResp{Peers: out})
+}
+
+func addPeerInternal(addr string) bool {
+	if addr == "" {
+		return false
+	}
+	peerMu.Lock()
+	defer peerMu.Unlock()
+	// 중복 방지
+	already := checkAddress(addr)
+	if already {
+		peers = append(peers, addr)
+	} else {
+		return false
+	}
+	log.Printf("[P2P][ADD] peer added: %s | total=%d", addr, len(peers))
+	return true
+}
+
+func peersSnapshot() []string {
+	peerMu.Lock()
+	defer peerMu.Unlock()
+	out := make([]string, len(peers)) // ← nil 방지 (빈이면 [])
+	copy(out, peers)
+	return out
+}
+
+func checkAddress(address string) bool {
+	answer := false
+	// 이미 등록된 주소인지 검증
+	for _, p := range peers {
+		if p == address {
+			answer = true
+			break
+		}
+	}
+	return answer
 }

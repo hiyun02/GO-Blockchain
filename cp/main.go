@@ -12,44 +12,43 @@ import (
 
 func main() {
 	// 1) 설정값 (환경변수 혹은 기본값 사용)
-	dbPath := getenvDefault("CP_DB_PATH", "blockchain_db")
-	cpID := getenvDefault("CP_ID", "CP-A")
-	addr := getenvDefault("PORT", "5000")
+	dbPath := getEnvDefault("CP_DB_PATH", "blockchain_db")
+	cpID := getEnvDefault("CP_ID", "CP-A")
+	addr := getEnvDefault("PORT", "5000")
 	addr = ":" + addr
 
-	boot := getenvDefault("BOOTSTRAP_ADDR", "") // 부트노드 고정주소
-	self := getenvDefault("NODE_ADDR", "")      // 이 노드의 외부접속 주소
+	boot := getEnvDefault("BOOTSTRAP_ADDR", "") // 부트노드 고정주소
+	self := getEnvDefault("NODE_ADDR", "")      // 이 노드의 외부접속 주소
 
 	// 2) DB 초기화
 	initDB(dbPath)
 	defer closeDB()
-	log.Printf("[BOOT] LevelDB: %s\n", dbPath)
+	log.Printf("[START] LevelDB: %s\n", dbPath)
 
 	// 3) 체인 부팅 (제네시스 자동 생성/복구 포함)
 	chain, err := newLowerChain(cpID)
 	if err != nil {
-		log.Fatal("[BOOT] chain init error: ", err)
+		log.Fatal("[START] chain init error: ", err)
 	}
-	log.Printf("[BOOT] LowerChain ready (cp_id=%s)\n", cpID)
+	log.Printf("[START] LowerChain ready (cp_id=%s)\n", cpID)
 
 	// 4) HTTP 라우팅 등록
 	mux := http.NewServeMux()
-	// CP 체인 API (확정형): /content/add, /block/finalize, /block/root, /blocks, /block/index, /block/hash, /search, /proof
+	// CP 체인 API 등록(확정형): /content/add, /block/finalize, /block/root, /blocks, /block/index, /block/hash, /search, /proof
 	RegisterAPI(mux, chain)
-	// P2P 엔드포인트
+	// P2P 엔드포인트 등록
 	//     - /peers : 피어 목록 조회
 	//     - /addPeer : 피어 추가
 	//     - /receive : 다른 노드가 보낸 확정 블록 수신
+	//	   - /register : 부트노드 연결 및 네트워크 연결
 	mux.HandleFunc("/peers", getPeers)
 	mux.HandleFunc("/addPeer", addPeer)
 	mux.HandleFunc("/receive", receiveBlock)
-
-	// 부트스트랩 등록 엔드포인트
 	mux.HandleFunc("/register", registerPeer)
 
 	// 5) 서버 시작 (고루틴으로 실행해 메인 Go 루틴이 계속 진행되도록)
 	go func() {
-		log.Println("[NODE] Running on", addr)
+		log.Println("[START] NODE Running on", addr)
 		if err := http.ListenAndServe(addr, mux); err != nil {
 			log.Fatal(err)
 		}
@@ -71,7 +70,7 @@ func main() {
 
 			if resp.StatusCode != http.StatusOK {
 				body, _ := io.ReadAll(resp.Body)
-				log.Printf("[BOOT] register status=%d body=%s", resp.StatusCode, string(body))
+				log.Printf("[BOOT] register SUCCESS : status=%d body=%s", resp.StatusCode, string(body))
 				return
 			}
 
@@ -101,7 +100,7 @@ func main() {
 	select {}
 }
 
-func getenvDefault(k, def string) string {
+func getEnvDefault(k, def string) string {
 	if v := os.Getenv(k); v != "" {
 		return v
 	}
