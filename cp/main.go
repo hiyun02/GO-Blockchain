@@ -70,27 +70,28 @@ func main() {
 
 			if resp.StatusCode != http.StatusOK {
 				body, _ := io.ReadAll(resp.Body)
-				log.Printf("[BOOT] register SUCCESS : status=%d body=%s", resp.StatusCode, string(body))
+				log.Printf("[BOOT] register failed : status=%d body=%s", resp.StatusCode, string(body))
 				return
 			}
 
-			var out struct {
+			var reg struct {
 				Peers []string `json:"peers"`
 			}
-			if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+			if err := json.NewDecoder(resp.Body).Decode(&reg); err != nil {
 				log.Printf("[BOOT] decode peers failed: %v", err)
 				return
 			}
+			log.Printf("[BOOT-JOIN] received %d peers from %s: %v", len(reg.Peers), boot, reg.Peers)
 
-			// 받은 피어들을 내 노드에 addPeer (HTTP로 자기 자신에 호출)
-			for _, p := range out.Peers {
-				bp, _ := json.Marshal(p)
-				_, _ = http.Post("http://"+self+"/addPeer", "application/json", strings.NewReader(string(bp)))
+			// 이전: http://self/addPeer 로 POST
+			// 변경: 같은 프로세스이므로 직접 추가 (레이스/이름 이슈 제거)
+			for _, addr := range reg.Peers {
+				addPeerInternal(addr)
 			}
 
 			// 초기 체인 동기화(부트노드로부터)
 			go syncChain(boot)
-			log.Printf("[BOOT] joined via %s; peers=%v", boot, out.Peers)
+			log.Printf("[BOOT] joined via %s; peers=%v", boot, reg.Peers)
 		}()
 	} else {
 		log.Println("[BOOT] skipping auto-join (BOOTSTRAP_ADDR or NODE_ADDR empty)")

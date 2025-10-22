@@ -305,13 +305,17 @@ func registerPeer(w http.ResponseWriter, r *http.Request) {
 
 	// 기존 피어들에게도 새 피어 알려주기(비동기)
 	go func(newPeer string, others []string) {
-		log.Printf("[P2P][REGISTER] notifying %d existing peers about %s", len(others), newPeer)
+		log.Printf("[P2P][REGISTER] notifying %d peers about %s", len(others), newPeer)
 		b, _ := json.Marshal(newPeer)
 		for _, op := range others {
-			_, _ = http.Post("http://"+op+"/addPeer", "application/json", strings.NewReader(string(b)))
+			resp, err := http.Post("http://"+op+"/addPeer", "application/json", strings.NewReader(string(b)))
 			if err != nil {
 				log.Printf("[P2P][REGISTER] notify failed to %s: %v", op, err)
+				continue
 			}
+			io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+			log.Printf("[P2P][REGISTER] notified %s (status=%d)", op, resp.StatusCode)
 		}
 	}(req.Addr, out)
 
@@ -328,7 +332,7 @@ func addPeerInternal(addr string) bool {
 	defer peerMu.Unlock()
 	// 중복 방지
 	already := checkAddress(addr)
-	if already {
+	if !already {
 		peers = append(peers, addr)
 	} else {
 		return false
@@ -340,7 +344,7 @@ func addPeerInternal(addr string) bool {
 func peersSnapshot() []string {
 	peerMu.Lock()
 	defer peerMu.Unlock()
-	out := make([]string, len(peers)) // ← nil 방지 (빈이면 [])
+	out := make([]string, len(peers)) // nil 방지 (빈이면 [])
 	copy(out, peers)
 	return out
 }
