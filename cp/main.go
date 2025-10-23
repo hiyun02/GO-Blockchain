@@ -83,8 +83,8 @@ func main() {
 			}
 			log.Printf("[BOOT-JOIN] received %d peers from %s: %v", len(reg.Peers), boot, reg.Peers)
 
-			// 이전: http://self/addPeer 로 POST
-			// 변경: 같은 프로세스이므로 직접 추가 (레이스/이름 이슈 제거)
+			// 부트노드와 부트노드에게 받은 노드 주소들을 peers 객체에 추가함
+			addPeerInternal(boot)
 			for _, addr := range reg.Peers {
 				addPeerInternal(addr)
 			}

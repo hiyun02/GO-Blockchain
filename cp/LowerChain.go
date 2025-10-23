@@ -145,6 +145,9 @@ func (ch *LowerChain) finalizeBlock() (LowerBlock, error) {
 		return LowerBlock{}, fmt.Errorf("set height: %w", err)
 	}
 
+	// 확정된 블록을 피어에게 전파
+	go broadcastBlock(nb)
+
 	// pending 비움
 	ch.pending = ch.pending[:0]
 	return nb, nil
