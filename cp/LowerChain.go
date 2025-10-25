@@ -36,8 +36,8 @@ type LowerChain struct {
 
 // 블록 finalize 기준
 var (
-	MaxPendingEntries = 500
-	MaxPendingBytes   = 4 * 1024 * 1024 // 4MB
+	MaxPendingEntries = 3
+	MaxPendingBytes   = 400
 )
 
 // cpID를 주입받아 제네시스 및 체인 생성
