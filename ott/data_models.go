@@ -8,7 +8,6 @@ package main
 // - LowerBlock     : CP 체인의 블록 구조 (Merkle Root 포함)
 // - ContractData   : CP-OTT 간 계약 정보
 // - UpperRecord    : OTT 체인에 저장되는 앵커 및 계약 스냅샷
-// - UpperBlock     : OTT 체인의 블록 구조
 ////////////////////////////////////////////////////////////////////////////////
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -20,12 +19,12 @@ package main
 ////////////////////////////////////////////////////////////////////////////////
 
 type ContentRecord struct {
-	ContentID   string            `json:"content_id"`     // 고유 ID
-	Info        map[string]string `json:"info,omitempty"` // 메타데이터 (제목, 설명, 카테고리 등)
-	Fingerprint string            `json:"fingerprint"`    // 컨텐츠 원본 무결성을 보장하는 해시값 (머클 트리 해싱을 위한 주요 필드)
-	StorageAddr string            `json:"storage_addr"`   // 저장 경로
-	DRM         *string           `json:"drm,omitempty"`  // (선택) DRM 관련 정보
-	Timestamp   string            `json:"timestamp"`      // 등록 시각
+	ContentID   string                 `json:"content_id"`     // 고유 ID
+	Info        map[string]interface{} `json:"info,omitempty"` // 메타데이터 (제목, 설명, 카테고리 등)
+	Fingerprint string                 `json:"fingerprint"`    // 컨텐츠 원본 무결성을 보장하는 해시값 (머클 트리 해싱을 위한 주요 필드)
+	StorageAddr string                 `json:"storage_addr"`   // 저장 경로
+	DRM         map[string]interface{} `json:"drm,omitempty"`  // (선택) DRM 관련 정보
+	Timestamp   string                 `json:"timestamp"`      // 등록 시각
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -37,12 +36,13 @@ type ContentRecord struct {
 ////////////////////////////////////////////////////////////////////////////////
 
 type LowerBlock struct {
-	Index      int             `json:"index"`       // 블록 번호 (0부터 시작)
+	Index      int             `json:"index"`       // 블록 번호
+	CpID       string          `json:"cp_id"`       // CP 체인 식별자
 	PrevHash   string          `json:"prev_hash"`   // 이전 블록의 해시
-	Timestamp  string          `json:"timestamp"`   // 블록 생성 시간
-	Entries    []ContentRecord `json:"entries"`     // 블록에 포함된 콘텐츠 레코드 목록
-	MerkleRoot string          `json:"merkle_root"` // 콘텐츠 엔트리들의 머클 루트
-	BlockHash  string          `json:"block_hash"`  // 블록 전체의 해시값 (PoW 또는 기타 합의 기반)
+	Timestamp  string          `json:"timestamp"`   // 생성 시간 (RFC3339 형식)
+	Entries    []ContentRecord `json:"entries"`     // 블록 내 콘텐츠 목록
+	MerkleRoot string          `json:"merkle_root"` // Entries의 해시 기반 머클루트
+	BlockHash  string          `json:"block_hash"`  // 블록 전체 해시 (헤더 기준)
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -80,22 +80,4 @@ type UpperRecord struct {
 	LowerRoot        string       `json:"lower_root"`        // CP 체인에서 전달된 머클 루트 (서명 포함)
 	AccessCatalog    []string     `json:"access_catalog"`    // 접근 가능한 콘텐츠 리스트
 	AnchorTimestamp  string       `json:"anchor_ts"`         // 앵커가 제출된 시간
-}
-
-////////////////////////////////////////////////////////////////////////////////
-// 5. UpperBlock (OTT 체인의 블록 구조)
-// ------------------------------------------------------------
-// OTT 체인에서 거버넌스 단위로 생성되는 블록.
-// - 여러 CP의 UpperRecord를 포함할 수 있음.
-// - 계약, 앵커, 정책 변경 등의 메타데이터를 포함.
-// - 난이도(difficulty)가 설정되어 있다면 PoW 형태로 블록 해시 봉인 가능.
-////////////////////////////////////////////////////////////////////////////////
-
-type UpperBlock struct {
-	Index     int           `json:"index"`      // 블록 번호
-	PrevHash  string        `json:"prev_hash"`  // 이전 블록의 해시
-	Timestamp string        `json:"timestamp"`  // 블록 생성 시간
-	Records   []UpperRecord `json:"records"`    // 포함된 UpperRecord 리스트
-	Nonce     int           `json:"nonce"`      // (선택) PoW 난수
-	BlockHash string        `json:"block_hash"` // 블록 전체의 해시
 }

@@ -9,14 +9,14 @@ import (
 var difficulty = 4
 
 // 블록의 Nonce 값을 바꿔가며 해시가 난이도 조건을 만족할 때까지 반복
-func proofOfWork(block Block) (string, int) {
+func proofOfWork(block UpperBlock) (string, int) {
 	nonce := 0
 	var hash string
 	target := strings.Repeat("0", difficulty) // 예: "0000"
 
 	for {
-		block.Header.Nonce = nonce
-		hash = calculateHash(block)
+		block.Nonce = nonce
+		hash = computeHash(block)
 
 		// 해시가 난이도 조건을 만족하면 성공
 		if strings.HasPrefix(hash, target) {

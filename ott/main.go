@@ -1,34 +1,33 @@
+// ott/main.go
 package main
 
 import (
 	"log"
 	"net/http"
+	"os"
 )
 
 func main() {
-	// 1. DB 초기화
-	initDB("blockchain_db")
+	// env
+	dbPath := getenv("UPPER_DB_PATH", "upper_db")
+	port := ":" + getenv("PORT", "7000")
+
+	// DB
+	initDB(dbPath)
 	defer closeDB()
+	log.Printf("[OTT] LevelDB: %s", dbPath)
 
-	// 2. 제네시스 블록 생성 (DB가 비었을 때만)
-	if len(blockchain) == 0 {
-		genesis := createGenesisBlock()
-		blockchain = append(blockchain, genesis)
-		saveBlockToDB(genesis)
-		updateHashTable(genesis)
-		log.Println("[NODE] Genesis block created")
+	// HTTP
+	mux := http.NewServeMux()
+	RegisterUpperAPI(mux)
+
+	log.Println("[OTT] listening on", port)
+	log.Fatal(http.ListenAndServe(port, mux))
+}
+
+func getenv(k, def string) string {
+	if v := os.Getenv(k); v != "" {
+		return v
 	}
-
-	// 3. API + P2P 서버 실행
-	http.HandleFunc("/chain", getBlockchain)
-	http.HandleFunc("/mine", mineBlock)
-	http.HandleFunc("/peers", getPeers)
-	http.HandleFunc("/addPeer", addPeer)
-	http.HandleFunc("/receive", receiveBlock)
-	http.HandleFunc("/block/index", getBlockByIndexAPI)
-	http.HandleFunc("/block/hash", getBlockByHashAPI)
-	http.HandleFunc("/block/payload", getBlockByContentAPI)
-
-	log.Println("[NODE] Running on port 5000...")
-	log.Fatal(http.ListenAndServe(":5000", nil))
+	return def
 }

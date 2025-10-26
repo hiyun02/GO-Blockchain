@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"strings"
+	"strconv"
 
 	"github.com/syndtr/goleveldb/leveldb"
 )
@@ -28,107 +28,117 @@ func closeDB() {
 	log.Println("[DB] Closed LevelDB")
 }
 
-// 블록을 LevelDB에 저장
-// - Key1: "block_<Index>" => 블록 전체 JSON
-// - Key2: "hash_<BlockHash>" => 블록 전체 JSON
-func saveBlockToDB(block Block) {
-	data, _ := json.Marshal(block)
+// ---- 키스페이스 (Upper/OTT 전용) --------------------------------------------
+// 블록     : u_block_<idx>       => UpperBlock JSON
+//           u_uhash_<hash>       => UpperBlock JSON
+// 메타     : u_height_latest      => int (마지막 인덱스)
+//           u_root_latest         => string (옵션: 마지막 UpperBlock root/hash 등)
+// 계약     : u_contract_<cp_id>   => ContractData JSON
+// 앵커     : u_anchor_<cp_id>     => AnchorState JSON {cp_id, lower_root, ts, sig}
+// HMAC 키  : u_key_<cp_id>        => string(secret)
 
-	// 블록 번호 기반 저장
-	keyByIndex := fmt.Sprintf("block_%d", block.Header.Index)
-	db.Put([]byte(keyByIndex), data, nil)
-
-	// 블록 해시 기반 저장
-	keyByHash := fmt.Sprintf("hash_%s", block.Header.Hash)
-	db.Put([]byte(keyByHash), data, nil)
-
-	log.Printf("[DB] Block #%d saved (Hash=%s)\n", block.Header.Index, block.Header.Hash)
+type AnchorState struct {
+	CPID      string `json:"cp_id"`
+	LowerRoot string `json:"lower_root"`
+	Timestamp string `json:"ts"`
+	Signature string `json:"sig"`
 }
 
-// ------------------------------------------------------------
-// 블록 내 각 컨텐츠(ContentRecord) 검색 HashTable 저장
-// ------------------------------------------------------------
-// Key-Value 예시:
-//
-//	"cid_<ContentID>"  => BlockHash (컨텐츠 ID 기반)
-//	"fp_<Fingerprint>" => BlockHash	(Fingerprint 기반)
-//	"info_<keyword>"   => BlockHash (제목, 카테고리 등 메타데이터 기반)
-//
-// ------------------------------------------------------------
-func updateHashTable(block Block) {
-	for _, entry := range block.Entries {
-		// 컨텐츠 ID 기반 Hash 검색
-		keyByCID := fmt.Sprintf("cid_%s", entry.ContentID)
-		db.Put([]byte(keyByCID), []byte(block.Header.Hash), nil)
-
-		// Fingerprint 기반 Hash 검색
-		keyByFP := fmt.Sprintf("fp_%s", entry.Fingerprint)
-		db.Put([]byte(keyByFP), []byte(block.Header.Hash), nil)
-
-		// 메타데이터 Key-Value 기반 단순 텍스트
-		for k, v := range entry.Info {
-			if v == "" {
-				continue
-			}
-			key := fmt.Sprintf("info_%s_%s", k, strings.ToLower(v))
-			db.Put([]byte(key), []byte(block.Header.Hash), nil)
-		}
-	}
-	log.Printf("[DB] Hash index updated for Block #%d (%d entries)\n",
-		block.Header.Index, len(block.Entries))
+// ---- 메타 --------------------------------------------------------------------
+func setHeightLatest(h int) error {
+	return db.Put([]byte("u_height_latest"), []byte(strconv.Itoa(h)), nil)
 }
-
-// ------------------------------------------------------------
-// 인덱스로 블록 조회
-// ------------------------------------------------------------
-func getBlockByIndex(index int) (Block, error) {
-	key := fmt.Sprintf("block_%d", index)
-	data, err := db.Get([]byte(key), nil)
+func getHeightLatest() (int, bool) {
+	b, err := db.Get([]byte("u_height_latest"), nil)
 	if err != nil {
-		return Block{}, err
+		return 0, false
 	}
-	var block Block
-	json.Unmarshal(data, &block)
-	return block, nil
-}
-
-// ------------------------------------------------------------
-// 블록 해시로 조회
-// ------------------------------------------------------------
-func getBlockByHash(hash string) (Block, error) {
-	key := fmt.Sprintf("hash_%s", hash)
-	data, err := db.Get([]byte(key), nil)
+	v, err := strconv.Atoi(string(b))
 	if err != nil {
-		return Block{}, err
+		return 0, false
 	}
-	var block Block
-	json.Unmarshal(data, &block)
-	return block, nil
+	return v, true
 }
 
-// ------------------------------------------------------------
-// 컨텐츠 키워드로 블록 검색
-// ------------------------------------------------------------
-// 검색 키워드가 Info의 일부거나 ContentID, Fingerprint에 일치하면 해당 블록 반환
-// ------------------------------------------------------------
-func getBlockByContent(keyword string) (Block, error) {
-	// 컨텐츠 ID 색인 조회
-	keyCID := fmt.Sprintf("cid_%s", keyword)
-	if hash, err := db.Get([]byte(keyCID), nil); err == nil {
-		return getBlockByHash(string(hash))
+// ---- 블록 저장/조회 ----------------------------------------------------------
+func saveBlock(blk UpperBlock) error {
+	j, err := json.Marshal(blk)
+	if err != nil {
+		return err
 	}
-
-	// Fingerprint 색인 조회
-	keyFP := fmt.Sprintf("fp_%s", keyword)
-	if hash, err := db.Get([]byte(keyFP), nil); err == nil {
-		return getBlockByHash(string(hash))
+	if err := db.Put([]byte(fmt.Sprintf("u_block_%d", blk.Index)), j, nil); err != nil {
+		return err
 	}
-
-	// Info 필드 기반 색인 조회
-	keyInfo := fmt.Sprintf("info_title_%s", strings.ToLower(keyword))
-	if hash, err := db.Get([]byte(keyInfo), nil); err == nil {
-		return getBlockByHash(string(hash))
+	if err := db.Put([]byte("u_uhash_"+blk.BlockHash), j, nil); err != nil {
+		return err
 	}
+	// 선택: 마지막 루트 캐시
+	_ = db.Put([]byte("u_root_latest"), []byte(blk.BlockHash), nil)
+	return nil
+}
+func getBlockByIndex(idx int) (UpperBlock, error) {
+	b, err := db.Get([]byte(fmt.Sprintf("u_block_%d", idx)), nil)
+	if err != nil {
+		return UpperBlock{}, err
+	}
+	var blk UpperBlock
+	if err := json.Unmarshal(b, &blk); err != nil {
+		return UpperBlock{}, err
+	}
+	return blk, nil
+}
+func getBlockByHash(hash string) (UpperBlock, error) {
+	b, err := db.Get([]byte("u_uhash_"+hash), nil)
+	if err != nil {
+		return UpperBlock{}, err
+	}
+	var blk UpperBlock
+	if err := json.Unmarshal(b, &blk); err != nil {
+		return UpperBlock{}, err
+	}
+	return blk, nil
+}
 
-	return Block{}, fmt.Errorf("no block found for keyword: %s", keyword)
+// ---- 계약/앵커/키 ------------------------------------------------------------
+func setContract(cpID string, c ContractData) error {
+	j, _ := json.Marshal(c)
+	return db.Put([]byte("u_contract_"+cpID), j, nil)
+}
+func getContract(cpID string) (ContractData, bool) {
+	b, err := db.Get([]byte("u_contract_"+cpID), nil)
+	if err != nil {
+		return ContractData{}, false
+	}
+	var c ContractData
+	if json.Unmarshal(b, &c) != nil {
+		return ContractData{}, false
+	}
+	return c, true
+}
+
+func setAnchor(a AnchorState) error {
+	j, _ := json.Marshal(a)
+	return db.Put([]byte("u_anchor_"+a.CPID), j, nil)
+}
+func getAnchor(cpID string) (AnchorState, bool) {
+	b, err := db.Get([]byte("u_anchor_"+cpID), nil)
+	if err != nil {
+		return AnchorState{}, false
+	}
+	var a AnchorState
+	if json.Unmarshal(b, &a) != nil {
+		return AnchorState{}, false
+	}
+	return a, true
+}
+
+func setHMACKey(cpID, secret string) error {
+	return db.Put([]byte("u_key_"+cpID), []byte(secret), nil)
+}
+func getHMACKey(cpID string) (string, bool) {
+	b, err := db.Get([]byte("u_key_"+cpID), nil)
+	if err != nil {
+		return "", false
+	}
+	return string(b), true
 }
