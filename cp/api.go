@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"time"
 )
 
 // JSON 헬퍼
@@ -194,6 +195,19 @@ func RegisterAPI(mux *http.ServeMux, chain *LowerChain) {
 			"record": rec,
 			"block":  blk,
 			"proof":  proof, // [][2]string { siblingHex, "L"/"R" }
+		})
+	})
+
+	// 부트노드 상태 확인
+	// GET /status : 헬스/높이/주소 리턴 (부트노드 선정에 사용)
+	mux.HandleFunc("/status", func(w http.ResponseWriter, r *http.Request) {
+		h, _ := getLatestHeight()
+		writeJSON(w, http.StatusOK, map[string]any{
+			"addr":       selfAddr,
+			"height":     h,
+			"is_boot":    isBoot.Load(),
+			"started_at": startedAt.Format(time.RFC3339),
+			"peers":      peersSnapshot(),
 		})
 	})
 }

@@ -17,8 +17,8 @@ func main() {
 	addr := getEnvDefault("PORT", "5000")
 	addr = ":" + addr
 
-	boot := getEnvDefault("BOOTSTRAP_ADDR", "") // 부트노드 고정주소
-	self := getEnvDefault("NODE_ADDR", "")      // 이 노드의 외부접속 주소
+	boot := getEnvDefault("BOOTSTRAP_ADDR", "cp-boot") // 부트노드 고정주소
+	self := getEnvDefault("NODE_ADDR", "cp-node-00")   // 이 노드의 외부접속 주소
 
 	// 2) DB 초기화
 	initDB(dbPath)
