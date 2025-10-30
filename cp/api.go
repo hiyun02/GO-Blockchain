@@ -198,7 +198,7 @@ func RegisterAPI(mux *http.ServeMux, chain *LowerChain) {
 		})
 	})
 
-	// 부트노드 상태 확인
+	// 노드 상태 확인
 	// GET /status : 헬스/높이/주소 리턴 (부트노드 선정에 사용)
 	mux.HandleFunc("/status", func(w http.ResponseWriter, r *http.Request) {
 		h, _ := getLatestHeight()
@@ -206,24 +206,11 @@ func RegisterAPI(mux *http.ServeMux, chain *LowerChain) {
 			"addr":       selfAddr,
 			"height":     h,
 			"is_boot":    isBoot.Load(),
+			"bootAddr":   bootAddr,
 			"started_at": startedAt.Format(time.RFC3339),
 			"peers":      peersSnapshot(),
 		})
 	})
-}
-
-// 새로운 피어 등록
-func addPeer(w http.ResponseWriter, r *http.Request) {
-	var addr string
-	if err := json.NewDecoder(r.Body).Decode(&addr); err != nil {
-		http.Error(w, "invalid peer format", http.StatusBadRequest)
-		return
-	}
-	if addPeerInternal(addr) {
-		w.Write([]byte("Peer added"))
-	} else {
-		w.Write([]byte("Peer exists"))
-	}
 }
 
 // 현재 노드가 알고 있는 피어 리스트 반환

@@ -44,7 +44,7 @@ var (
 func newLowerChain(cpID string) (*LowerChain, error) {
 	ch := &LowerChain{cpID: cpID, pending: make([]ContentRecord, 0)}
 
-	// 제네시스 존재?
+	// 제네시스 존재 여부 판단
 	blk0, err := getBlockByIndex(0)
 	if err != nil {
 		// 없으면 생성

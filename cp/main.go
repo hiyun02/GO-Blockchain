@@ -34,17 +34,19 @@ func main() {
 
 	// 4) HTTP 라우팅 등록
 	mux := http.NewServeMux()
-	// CP 체인 API 등록(확정형): /content/add, /block/finalize, /block/root, /blocks, /block/index, /block/hash, /search, /proof
+	// CP 체인 API 등록(확정형): /content/add, /block/finalize, /block/root, /blocks, /block/index, /block/hash, /search, /proof, /status
 	RegisterAPI(mux, chain)
 	// P2P 엔드포인트 등록
 	//     - /peers : 피어 목록 조회
 	//     - /addPeer : 피어 추가
 	//     - /receive : 다른 노드가 보낸 확정 블록 수신
 	//	   - /register : 부트노드 연결 및 네트워크 연결
+	//	   - /bootNotify : 부트노드 변경 수신
 	mux.HandleFunc("/peers", getPeers)
 	mux.HandleFunc("/addPeer", addPeer)
 	mux.HandleFunc("/receive", receiveBlock)
 	mux.HandleFunc("/register", registerPeer)
+	mux.HandleFunc("/bootNotify", bootNotify)
 
 	// 5) 서버 시작 (고루틴으로 실행해 메인 Go 루틴이 계속 진행되도록)
 	go func() {
@@ -54,9 +56,9 @@ func main() {
 		}
 	}()
 
-	// 6) 자동 부트스트랩: 부트노드에 등록 -> 피어 목록 받아 로컬 등록 -> 초기 동기화
-	//    (부트노드 자신은 BOOTSTRAP_ADDR를 비우거나 자기 주소로 두고, 여기서 스킵돼도 무방)
-	if boot != "" && self != "" {
+	// 6) 자동 부트스트랩
+	//  부트노드가 아니라면 부트노드에 자신의 주소를 등록 -> 부트노드로부터 노드 주소 목록 받아 등록 -> 체인 동기화
+	if boot != "" && self != "" && boot != self {
 		go func() {
 			payload := map[string]string{"addr": self, "cp_id": cpID}
 			b, _ := json.Marshal(payload)
@@ -97,7 +99,14 @@ func main() {
 		log.Println("[BOOT] skipping auto-join (BOOTSTRAP_ADDR or NODE_ADDR empty)")
 	}
 
-	// 7) 메인 Go 루틴 유지
+	// 7) 부트노드 감시 루틴 실행
+	// 부트노드가 다운되면 자동으로 새로운 부트노드 선출
+	go func() {
+		log.Println("[BOOT] starting bootnode watcher (3s interval)")
+		startBootWatcher()
+	}()
+
+	// 8) 메인 Go 루틴 유지
 	select {}
 }
 
