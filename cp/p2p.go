@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 )
 
 // -----------------------------------------------------------------------------
@@ -15,6 +16,8 @@ import (
 // -----------------------------------------------------------------------------
 var peers []string
 var peerMu sync.Mutex
+var peerAliveMap = make(map[string]bool) // 노드 상태를 주소:생존여부 형태로 관리하는 맵
+var aliveMu sync.RWMutex
 
 // -----------------------------------------------------------------------------
 // 내부 체인 상태 보호용 뮤텍스
@@ -279,6 +282,12 @@ func addPeerInternal(addr string) bool {
 		return false
 	}
 	log.Printf("[P2P][ADD] peer added: %s | total=%d", addr, len(peers))
+
+	// 생존 상태 초기화
+	aliveMu.Lock()
+	peerAliveMap[addr] = true
+	aliveMu.Unlock()
+
 	return true
 }
 
@@ -300,4 +309,68 @@ func checkAddress(address string) bool {
 		}
 	}
 	return answer
+}
+
+// 노드를 주소 목록에서 삭제 함수
+func removePeer(addr string) {
+	peerMu.Lock()
+	defer peerMu.Unlock()
+
+	newList := peers[:0] // 재사용 슬라이스 (GC 최소화)
+	for _, p := range peers {
+		if p != addr {
+			newList = append(newList, p)
+		}
+	}
+	peers = newList
+
+	// 상태맵에서도 제거
+	aliveMu.Lock()
+	delete(peerAliveMap, addr)
+	aliveMu.Unlock()
+
+	log.Printf("[PEER] removed: %s", addr)
+}
+
+// 특정 노드 주소와 상태를 입력받아 기록
+func markAlive(addr string, status bool) {
+	aliveMu.Lock()
+	defer aliveMu.Unlock()
+	peerAliveMap[addr] = status
+}
+
+// 네트워크 감시 루틴(전체 노드 생존 여부 확인)
+func startNetworkWatcher() {
+	t := time.NewTicker(10 * time.Second)
+	defer t.Stop()
+
+	for range t.C {
+		currentBoot := getBootAddr()
+		if currentBoot == "" {
+			continue
+		}
+
+		for _, addr := range peersSnapshot() {
+			if addr == selfAddr {
+				continue
+			}
+
+			_, ok := probeStatus(addr)
+			if ok {
+				markAlive(addr, true)
+				continue
+			}
+
+			// 응답 없음 -> 제거 및 aliveMap 갱신
+			markAlive(addr, false)
+			log.Printf("[PEER] removing dead node: %s", addr)
+			removePeer(addr)
+
+			// 만약 죽은 노드가 부트노드였다면
+			if addr == currentBoot {
+				log.Printf("[BOOT] bootnode %s is dead → starting re-election", addr)
+				electAndSwitch()
+			}
+		}
+	}
 }

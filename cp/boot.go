@@ -56,6 +56,10 @@ func registerPeer(w http.ResponseWriter, r *http.Request) {
 	} else {
 		log.Printf("[P2P][REGISTER] peer already exists: %s", req.Addr)
 	}
+
+	// 신규 노드는 peerAliveMap에 초기 상태 초기화
+	markAlive(req.Addr, true)
+
 	// 응답으로 넘겨줄 피어목록을 만듦 (자기 자신은 제외)
 	out := make([]string, 0, len(peers))
 	for _, p := range peers {
@@ -128,10 +132,10 @@ func probeStatus(addr string) (nodeStatus, bool) {
 
 // 부트노드 선출 및 전환
 // 네트워크 상의 모든 노드(peers + self)를 조사
-// 1) 가장 높은 블록 높이를 가진 노드를 찾고
+// 1) 가장 높은 블록 높이를 가진 노드를 찾음
 // 2) 동률이면 주소 사전순으로 가장 앞선 노드를 부트노드로 지정
-// 현재 노드가 그 승자라면 -> self를 부트노드로 승격
-// 그렇지 않으면 -> 해당 승자를 부트노드로 인식
+// 현재 노드가 그 승자라면 => self를 부트노드로 승격
+// 그렇지 않으면 => 해당 승자를 부트노드로 인식
 func electAndSwitch() {
 	// 후보: peers + self
 	cand := peersSnapshot()
@@ -142,27 +146,40 @@ func electAndSwitch() {
 		ns nodeStatus
 		ok bool
 	}
-	res := make([]info, len(cand))
-	var wg sync.WaitGroup
+	// 각 후보 노드(cand)의 상태를 병렬로 수집
+	res := make([]info, len(cand)) // 후보 노드 개수만큼 info 구조체 슬라이스 미리 생성
+	var wg sync.WaitGroup          // 모든 고루틴이 끝날 때까지 대기하기 위한 동기화 객체
+
 	for i, a := range cand {
-		wg.Add(1)
+		wg.Add(1) // go루틴 하나 실행할 때마다 할 일 +1
 		go func(i int, addr string) {
-			defer wg.Done()
+			defer wg.Done() // 이 go루틴이 끝나면 할 일 -1
+
+			// 각 노드의 /status API를 호출하여 (Addr, Height, IsBoot, Peers) 상태를 조회
 			ns, ok := probeStatus(addr)
+
+			// 병렬로 실행되지만, i는 고정되어 있으므로
+			// 결과를 res[i]에 정확히 저장할 수 있음 (데이터 경합 없음)
 			res[i] = info{ns, ok}
 		}(i, a)
 	}
+
+	// 위 for 루프 안의 모든 고루틴이 끝날 때까지 대기
+	// 모든 /status 요청이 완료될 때까지 블록
 	wg.Wait()
 
-	// 생존만
+	// 수집된 결과를 바탕으로 살아있는 노드(live)만 선별
 	live := make([]nodeStatus, 0, len(res))
 	for _, r := range res {
 		if r.ok {
 			live = append(live, r.ns)
+			markAlive(r.ns.Addr, true) // 노드 상태 true로 기록
+		} else {
+			markAlive(r.ns.Addr, false) // 노드 상태 false로 기록
 		}
 	}
+	// 살아있는 노드가 없다면 자기 자신을 부트로 승격
 	if len(live) == 0 {
-		// 아무도 안 보이면 자기 자신을 부트로 승격
 		isBoot.Store(true)
 		setBootAddr(selfAddr)
 		log.Printf("[BOOT] no live peers; self-promoted as boot: %s", selfAddr)
@@ -237,33 +254,6 @@ func bootNotify(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(200)
-}
-
-func startBootWatcher() {
-	t := time.NewTicker(3 * time.Second)
-	misses := 0
-	for range t.C {
-		ba := getBootAddr()
-		if ba == "" {
-			continue
-		}
-		// 내가 부트일 땐 헬스체크 스킵(필요시 self /status도 확인 가능)
-		if ba == selfAddr && isBoot.Load() {
-			misses = 0
-			continue
-		}
-
-		if _, ok := probeStatus(ba); ok {
-			misses = 0
-			continue
-		}
-		misses++
-		if misses >= 3 { // 3회 연속 실패 → 장애로 간주
-			log.Printf("[BOOT] bootnode unreachable (%s), starting election", ba)
-			electAndSwitch()
-			misses = 0
-		}
-	}
 }
 
 func setBootAddr(addr string) {
