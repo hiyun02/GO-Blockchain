@@ -79,6 +79,6 @@ type UpperBlock struct {
 	PrevHash  string        `json:"prev_hash"`  // 이전 블록의 해시
 	Timestamp string        `json:"timestamp"`  // 블록 생성 시간
 	Records   []UpperRecord `json:"records"`    // 포함된 UpperRecord 리스트
-	Nonce     int           `json:"nonce"`      // (선택) PoW 난수
+	Nonce     int           `json:"nonce"`      // PoW 난수
 	BlockHash string        `json:"block_hash"` // 블록 전체의 해시
 }

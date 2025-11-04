@@ -97,11 +97,12 @@ func main() {
 		log.Println("[BOOT] skipping auto-join (BOOTSTRAP_ADDR or NODE_ADDR empty)")
 	}
 
-	// 7) 부트노드 감시 루틴 실행
-	// 부트노드가 다운되면 자동으로 새로운 부트노드 선출
+	// 7) 네트워크 감시 루틴 실행
+	// 네트워크 내 모든 노드를 주기적으로 검사하고,
+	// 응답이 없는 노드를 제거하며, 만약 부트노드가 죽은 경우 새로 선출하는 감시 루프
 	go func() {
-		log.Println("[BOOT] starting bootnode watcher (3s interval)")
-		startBootWatcher()
+		log.Println("[WATCHER] starting unified network watcher (10s interval)")
+		startNetworkWatcher()
 	}()
 
 	// 8) 메인 Go 루틴 유지

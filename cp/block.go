@@ -1,7 +1,5 @@
 package main
 
-import "time"
-
 ////////////////////////////////////////////////////////////////////////////////
 // LowerBlock (CP 체인 블록 구조)
 // ------------------------------------------------------------
@@ -33,7 +31,7 @@ const (
 	prevHashZeros    = "0000000000000000000000000000000000000000000000000000000000000000" // 64자리 0
 )
 
-// 제네시스 블록 생성 (Nonce=0, Difficulty=0)
+// 제네시스 블록 생성
 func createGenesisBlock(cpID string) LowerBlock {
 	root := sha256Hex([]byte{}) // 빈 MerkleRoot
 	genesis := LowerBlock{
@@ -70,35 +68,4 @@ func (b LowerBlock) computeHash() string {
 		Difficulty: b.Difficulty,
 	}
 	return sha256Hex(jsonCanonical(hdr))
-}
-
-// 새 블록 생성 (PoW 채굴 결과 반영)
-// entries: 블록에 포함할 ContentRecord 배열
-// difficulty: GlobalDifficulty 사용
-func createNewBlock(cpID string, prev LowerBlock, entries []ContentRecord, difficulty int) LowerBlock {
-	// 콘텐츠 해시 → Merkle Root 계산
-	leafHashes := make([]string, len(entries))
-	for i, r := range entries {
-		leafHashes[i] = hashContentRecord(r)
-	}
-	root := merkleRootHex(leafHashes)
-
-	index := prev.Index + 1
-	ts := time.Now().Format(time.RFC3339)
-
-	// PoW 수행 (pow.go)
-	result := mineBlock(prev.BlockHash, root, index, difficulty)
-
-	newBlock := LowerBlock{
-		Index:      index,
-		CpID:       cpID,
-		PrevHash:   prev.BlockHash,
-		Timestamp:  ts,
-		Entries:    entries,
-		MerkleRoot: root,
-		Nonce:      result.Nonce,
-		Difficulty: difficulty,
-		BlockHash:  result.BlockHash,
-	}
-	return newBlock
 }
