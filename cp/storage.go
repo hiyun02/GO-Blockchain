@@ -284,3 +284,11 @@ func listBlocksPaginated(offset, limit int) ([]LowerBlock, int, error) {
 	}
 	return out, total, nil
 }
+
+// 현재 노드의 CP 식별자 반환 (메타데이터에서 읽기)
+func selfID() string {
+	if v, ok := getMeta("meta_cp_id"); ok {
+		return v
+	}
+	return "UNKNOWN_CP"
+}

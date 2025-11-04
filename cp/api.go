@@ -4,6 +4,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"time"
@@ -16,63 +17,10 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-// RegisterAPI : main.go에서 mux와 LowerChain을 넘겨 핸들만 등록
+// main.go에서 mux와 LowerChain을 넘겨받아 API 핸들 등록
 func RegisterAPI(mux *http.ServeMux, chain *LowerChain) {
-	// 1) 콘텐츠 추가 (pending 적재 + 저널 기록은 blockchain.go 내부 AddContent에서 처리)
-	// POST /content/add
-	mux.HandleFunc("/content/add", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		var rec ContentRecord
-		if err := json.NewDecoder(r.Body).Decode(&rec); err != nil {
-			http.Error(w, "invalid json", http.StatusBadRequest)
-			return
-		}
-		// 최소 필수값 검증 (머클/증명 안정성)
-		if rec.ContentID == "" || rec.Fingerprint == "" || rec.StorageAddr == "" {
-			http.Error(w, "missing required fields (content_id, fingerprint, storage_addr)", http.StatusBadRequest)
-			return
-		}
-		// 컨텐츠 데이터 검증 후 blockchain pending 추가 작업 실행
-		chain.addContent(rec)
-		// pending 상태 시각화
-		cnt, bytes := chain.pendingStats()
-		writeJSON(w, http.StatusOK, map[string]any{
-			"ok":     true,
-			"queued": map[string]int{"count": cnt, "bytes": bytes},
-		})
-	})
 
-	// 2) 블록 확정 (임계치 충족 시에만; force=true로 우회 가능)
-	// POST /block/finalize?force=true|false
-	mux.HandleFunc("/block/finalize", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		force := r.URL.Query().Get("force") == "true"
-		blk, err := chain.finalizeIfEligible(force)
-		if err != nil {
-			if err == ErrNotEligible {
-				cnt, bytes := chain.pendingStats()
-				writeJSON(w, http.StatusPreconditionFailed, map[string]any{ // 412
-					"ok":         false,
-					"reason":     "threshold_not_met",
-					"pending":    map[string]int{"count": cnt, "bytes": bytes},
-					"thresholds": map[string]int{"min_count": MaxPendingEntries, "min_bytes": MaxPendingBytes},
-					"hint":       "add more contents or call with force=true",
-				})
-				return
-			}
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "block": blk})
-	})
-
-	// 3) 최신 머클루트 (OTT 앵커용)
+	// 최신 머클루트 (OTT 앵커용)
 	// GET /block/root
 	mux.HandleFunc("/block/root", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -83,7 +31,7 @@ func RegisterAPI(mux *http.ServeMux, chain *LowerChain) {
 		writeJSON(w, http.StatusOK, map[string]string{"root": root})
 	})
 
-	// 4) 블록 조회: 인덱스
+	// 블록 조회: 인덱스
 	// GET /block/index?id=<int>
 	mux.HandleFunc("/block/index", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -108,7 +56,7 @@ func RegisterAPI(mux *http.ServeMux, chain *LowerChain) {
 		writeJSON(w, http.StatusOK, blk)
 	})
 
-	// 5) 블록 조회: 해시
+	// 블록 조회: 해시
 	// GET /block/hash?value=<hash>
 	mux.HandleFunc("/block/hash", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -128,7 +76,7 @@ func RegisterAPI(mux *http.ServeMux, chain *LowerChain) {
 		writeJSON(w, http.StatusOK, blk)
 	})
 
-	// 6) 키워드로 블록 검색(정확 일치: cid/fp/info_title)
+	// 키워드로 블록 검색(정확 일치: cid/fp/info_title)
 	// GET /search?value=<keyword>
 	mux.HandleFunc("/search", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -148,9 +96,8 @@ func RegisterAPI(mux *http.ServeMux, chain *LowerChain) {
 		writeJSON(w, http.StatusOK, blk)
 	})
 
-	// 7) 전체 장부 조회 (페이지네이션)
+	// 전체 장부 조회 (페이지네이션)
 	// GET /blocks?offset=<int>&limit=<int>
-	// storage.go에 listBlocksPaginated 추가한 버전 기준
 	mux.HandleFunc("/blocks", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -174,7 +121,7 @@ func RegisterAPI(mux *http.ServeMux, chain *LowerChain) {
 		})
 	})
 
-	// 8) 머클 증명 제공 (색인 기반 즉시 접근)
+	// 머클 증명 제공 (색인 기반 즉시 접근)
 	// GET /proof?cid=<content_id>
 	mux.HandleFunc("/proof", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -211,10 +158,37 @@ func RegisterAPI(mux *http.ServeMux, chain *LowerChain) {
 			"peers":      peersSnapshot(),
 		})
 	})
-}
 
-// 현재 노드가 알고 있는 피어 리스트 반환
-func getPeers(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(peersSnapshot()) // 빈이어도 "[]"
+	// 현재 노드가 알고 있는 피어 리스트 반환
+	// GET /peers
+	mux.HandleFunc("/peers", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(peersSnapshot()) // 비어있어도 "[]" 반환
+	})
+
+	// 최초 채굴 요청을 받아 모든 노드에 채굴을 시작시키는 트리거
+	// GET /mine
+	mux.HandleFunc("/mine", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			PrevHash   string `json:"prev_hash"`
+			MerkleRoot string `json:"merkle_root"`
+			Index      int    `json:"index"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid JSON", http.StatusBadRequest)
+			return
+		}
+		defer r.Body.Close()
+
+		log.Printf("[API][MINE] Mining trigger received → index=%d", req.Index)
+
+		// 핵심 로직은 별도 함수로 위임
+		go triggerNetworkMining(req.PrevHash, req.MerkleRoot, req.Index)
+
+		// 요청 즉시 응답 반환
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{
+			"status": "mining triggered",
+		})
+	})
 }

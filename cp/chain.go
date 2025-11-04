@@ -1,0 +1,136 @@
+package main
+
+import (
+	"fmt"
+	"strconv"
+	"strings"
+)
+
+////////////////////////////////////////////////////////////////////////////////
+// LowerChain (CP별 독립 하부체인, PoW 기반 분산 합의)
+// ----------------------------------------------------------------------------
+// - PoW 연산은 pow.go의 mineBlock() 호출
+// - 확정형(PBFT) 관련 pending 로직 제거
+////////////////////////////////////////////////////////////////////////////////
+
+type LowerChain struct {
+	cpID       string
+	difficulty int // 체인 난이도 (모든 노드 동일)
+}
+
+// 체인 초기화 및 제네시스 확인
+func newLowerChain(cpID string) (*LowerChain, error) {
+	ch := &LowerChain{
+		cpID:       cpID,
+		difficulty: GlobalDifficulty,
+	}
+
+	// 제네시스 블록 존재 여부 확인
+	blk0, err := getBlockByIndex(0)
+	if err != nil {
+		// 없으면 새로 생성
+		genesis := createGenesisBlock(cpID)
+		if err := saveBlockToDB(genesis); err != nil {
+			return nil, fmt.Errorf("save genesis: %w", err)
+		}
+		if err := updateIndicesForBlock(genesis); err != nil {
+			return nil, fmt.Errorf("index genesis: %w", err)
+		}
+		if err := putMeta("meta_cp_id", cpID); err != nil {
+			return nil, fmt.Errorf("meta cp_id: %w", err)
+		}
+		if err := setLatestHeight(0); err != nil {
+			return nil, fmt.Errorf("meta height: %w", err)
+		}
+		logInfo("[INIT] Created genesis block for %s", cpID)
+		return ch, nil
+	}
+
+	// cpID 일치성 확인
+	if blk0.CpID != cpID {
+		return nil, fmt.Errorf("cp_id mismatch: db=%q new=%q", blk0.CpID, cpID)
+	}
+
+	logInfo("[INIT] Loaded existing chain for %s (genesis hash=%s)", cpID, blk0.BlockHash[:12])
+	return ch, nil
+}
+
+// content_id로 머클 증명 생성
+// 반환: (레코드, 포함된 블록, 증명경로, 존재여부)
+func (ch *LowerChain) getContentWithProofIndexed(contentID string) (ContentRecord, LowerBlock, [][2]string, bool) {
+	// storage의 "cid_" 색인을 직접 읽어와 접근
+	ptrKey := "cid_" + contentID
+	ptrBytes, err := db.Get([]byte(ptrKey), nil)
+	if err != nil {
+		return ContentRecord{}, LowerBlock{}, nil, false
+	}
+	parts := strings.Split(string(ptrBytes), ":")
+	if len(parts) != 2 {
+		return ContentRecord{}, LowerBlock{}, nil, false
+	}
+	bi, err1 := strconv.Atoi(parts[0])
+	ei, err2 := strconv.Atoi(parts[1])
+	if err1 != nil || err2 != nil {
+		return ContentRecord{}, LowerBlock{}, nil, false
+	}
+	blk, err := getBlockByIndex(bi)
+	if err != nil || ei < 0 || ei >= len(blk.Entries) {
+		return ContentRecord{}, LowerBlock{}, nil, false
+	}
+	rec := blk.Entries[ei]
+	leaf := make([]string, len(blk.Entries))
+	for i, r := range blk.Entries {
+		leaf[i] = hashContentRecord(r)
+	}
+	proof := merkleProof(leaf, ei)
+	return rec, blk, proof, true
+}
+
+// 외부 블록 수신 -> 검증 및 체인 반영
+func onBlockReceived(lb LowerBlock) error {
+	miningStop.Store(true) // 즉시 채굴 중단
+
+	// 이전 블록 확인
+	prev, err := getBlockByIndex(lb.Index - 1)
+	if err != nil {
+		return fmt.Errorf("load prev: %w", err)
+	}
+
+	// 검증
+	if lb.PrevHash != prev.BlockHash {
+		return fmt.Errorf("invalid prev hash")
+	}
+	if !validHash(lb.BlockHash, lb.Difficulty) {
+		return fmt.Errorf("invalid PoW hash")
+	}
+
+	// 체인에 추가
+	if err := saveBlockToDB(lb); err != nil {
+		return fmt.Errorf("save block: %w", err)
+	}
+	if err := updateIndicesForBlock(lb); err != nil {
+		return fmt.Errorf("update indices: %w", err)
+	}
+	if err := setLatestHeight(lb.Index); err != nil {
+		return fmt.Errorf("set height: %w", err)
+	}
+
+	logInfo("[CHAIN] Accepted New Block #%d (%s)", lb.Index, lb.BlockHash[:12])
+	return nil
+}
+
+// 최신 루트 조회
+func (ch *LowerChain) LatestRoot() string {
+	return getLatestRoot()
+}
+
+// 체인 상태 출력
+func (ch *LowerChain) chainInfo() string {
+	height, _ := getLatestHeight()
+	return fmt.Sprintf("CP=%s | Height=%d | Difficulty=%d", ch.cpID, height, ch.difficulty)
+}
+
+// 간단 로그 출력 함수
+func logInfo(format string, args ...interface{}) {
+	fmt.Printf("[INFO] "+format+"\n", args...)
+}

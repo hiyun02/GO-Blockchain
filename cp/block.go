@@ -1,5 +1,7 @@
 package main
 
+import "time"
+
 ////////////////////////////////////////////////////////////////////////////////
 // LowerBlock (CP 체인 블록 구조)
 // ------------------------------------------------------------
@@ -20,6 +22,8 @@ type LowerBlock struct {
 	Timestamp  string          `json:"timestamp"`   // 생성 시간 (RFC3339 형식)
 	Entries    []ContentRecord `json:"entries"`     // 블록 내 콘텐츠 목록
 	MerkleRoot string          `json:"merkle_root"` // Entries의 해시 기반 머클루트
+	Nonce      int             `json:"nonce"`       // PoW 성공 시점의 Nonce
+	Difficulty int             `json:"difficulty"`  // 난이도 (ex: 4 => "0000"으로 시작)
 	BlockHash  string          `json:"block_hash"`  // 블록 전체 해시 (헤더 기준)
 }
 
@@ -29,22 +33,24 @@ const (
 	prevHashZeros    = "0000000000000000000000000000000000000000000000000000000000000000" // 64자리 0
 )
 
-// 제네시스 블록 생성
+// 제네시스 블록 생성 (Nonce=0, Difficulty=0)
 func createGenesisBlock(cpID string) LowerBlock {
-	emptyRoot := sha256Hex([]byte{})
+	root := sha256Hex([]byte{}) // 빈 MerkleRoot
 	genesis := LowerBlock{
 		Index:      0,
 		CpID:       cpID,
 		PrevHash:   prevHashZeros,
 		Timestamp:  genesisTimestamp,
 		Entries:    []ContentRecord{},
-		MerkleRoot: emptyRoot,
+		MerkleRoot: root,
+		Nonce:      0,
+		Difficulty: 0,
 	}
 	genesis.BlockHash = genesis.computeHash()
 	return genesis
 }
 
-// 해시에 들어갈 필드 서브셋만 직렬화하여 블록 해시 계산
+// 블록 헤더 기준 해시 계산
 func (b LowerBlock) computeHash() string {
 	hdr := struct {
 		Index      int    `json:"index"`
@@ -52,9 +58,47 @@ func (b LowerBlock) computeHash() string {
 		PrevHash   string `json:"prev_hash"`
 		Timestamp  string `json:"timestamp"`
 		MerkleRoot string `json:"merkle_root"`
+		Nonce      int    `json:"nonce"`
+		Difficulty int    `json:"difficulty"`
 	}{
-		Index: b.Index, CpID: b.CpID, PrevHash: b.PrevHash,
-		Timestamp: b.Timestamp, MerkleRoot: b.MerkleRoot,
+		Index:      b.Index,
+		CpID:       b.CpID,
+		PrevHash:   b.PrevHash,
+		Timestamp:  b.Timestamp,
+		MerkleRoot: b.MerkleRoot,
+		Nonce:      b.Nonce,
+		Difficulty: b.Difficulty,
 	}
 	return sha256Hex(jsonCanonical(hdr))
+}
+
+// 새 블록 생성 (PoW 채굴 결과 반영)
+// entries: 블록에 포함할 ContentRecord 배열
+// difficulty: GlobalDifficulty 사용
+func createNewBlock(cpID string, prev LowerBlock, entries []ContentRecord, difficulty int) LowerBlock {
+	// 콘텐츠 해시 → Merkle Root 계산
+	leafHashes := make([]string, len(entries))
+	for i, r := range entries {
+		leafHashes[i] = hashContentRecord(r)
+	}
+	root := merkleRootHex(leafHashes)
+
+	index := prev.Index + 1
+	ts := time.Now().Format(time.RFC3339)
+
+	// PoW 수행 (pow.go)
+	result := mineBlock(prev.BlockHash, root, index, difficulty)
+
+	newBlock := LowerBlock{
+		Index:      index,
+		CpID:       cpID,
+		PrevHash:   prev.BlockHash,
+		Timestamp:  ts,
+		Entries:    entries,
+		MerkleRoot: root,
+		Nonce:      result.Nonce,
+		Difficulty: difficulty,
+		BlockHash:  result.BlockHash,
+	}
+	return newBlock
 }

@@ -34,17 +34,15 @@ func main() {
 
 	// 4) HTTP 라우팅 등록
 	mux := http.NewServeMux()
-	// CP 체인 API 등록(확정형): /content/add, /block/finalize, /block/root, /blocks, /block/index, /block/hash, /search, /proof, /status
+	// 사용자와 상호작용을 위한 API 등록
 	RegisterAPI(mux, chain)
 	// P2P 엔드포인트 등록
-	//     - /peers : 피어 목록 조회
-	//     - /addPeer : 피어 추가
+	//     - /addPeer : 기존 노드들이 신규 노드를 추가
 	//     - /receive : 다른 노드가 보낸 확정 블록 수신
 	//	   - /register : 부트노드 연결 및 네트워크 연결
 	//	   - /bootNotify : 부트노드 변경 수신
-	mux.HandleFunc("/peers", getPeers)
 	mux.HandleFunc("/addPeer", addPeer)
-	mux.HandleFunc("/receive", receiveBlock)
+	mux.HandleFunc("/receive", receive)
 	mux.HandleFunc("/register", registerPeer)
 	mux.HandleFunc("/bootNotify", bootNotify)
 

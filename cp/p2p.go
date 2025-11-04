@@ -3,10 +3,8 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
-	"strings"
 	"sync"
 )
 
@@ -60,96 +58,6 @@ func validateLowerBlock(newBlk, prevBlk LowerBlock) error {
 }
 
 // -----------------------------------------------------------------------------
-// 브로드캐스트: 연결된 모든 피어에 LowerBlock POST /receive
-// -----------------------------------------------------------------------------
-func broadcastBlock(block LowerBlock) {
-	peerMu.Lock()
-	targets := append([]string(nil), peers...)
-	peerMu.Unlock()
-
-	data, _ := json.Marshal(block)
-
-	for _, peer := range targets {
-		url := "http://" + peer + "/receive"
-		go func(peerURL string, body []byte) {
-			resp, err := http.Post(peerURL, "application/json", strings.NewReader(string(body)))
-			if err != nil {
-				log.Printf("[P2P] Failed to send block to %s: %v\n", peerURL, err)
-				return
-			}
-			io.Copy(io.Discard, resp.Body)
-			_ = resp.Body.Close()
-			log.Printf("[P2P] Block broadcasted to %s (status=%d)\n", peerURL, resp.StatusCode)
-		}(url, data)
-	}
-}
-
-// -----------------------------------------------------------------------------
-// 수신 핸들러: POST /receive
-// - 새 블록 수신 → 로컬 최신 블록과 검증 → 저장/색인/메타 업데이트
-// - 중복/역행/불일치 시 거절
-// -----------------------------------------------------------------------------
-func receiveBlock(w http.ResponseWriter, r *http.Request) {
-	var newBlock LowerBlock
-	if err := json.NewDecoder(r.Body).Decode(&newBlock); err != nil {
-		http.Error(w, "invalid block data", http.StatusBadRequest)
-		return
-	}
-
-	chainMu.Lock()
-	defer chainMu.Unlock()
-
-	// 제네시스는 로컬 부팅(NewLowerChain)에서 이미 생성되어 있다고 가정.
-	// 최신 높이 로드
-	lastH, ok := getLatestHeight()
-	if !ok {
-		http.Error(w, "local chain not initialized (height meta missing)", http.StatusServiceUnavailable)
-		return
-	}
-	prevBlk, err := getBlockByIndex(lastH)
-	if err != nil {
-		http.Error(w, "failed to load last block", http.StatusInternalServerError)
-		return
-	}
-
-	// 역행/중복 방지
-	if newBlock.Index <= prevBlk.Index {
-		http.Error(w, "stale or duplicate block", http.StatusConflict)
-		return
-	}
-
-	// 검증
-	if err := validateLowerBlock(newBlock, prevBlk); err != nil {
-		log.Printf("[P2P] Invalid block received: %v\n", err)
-		http.Error(w, "invalid block: "+err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	// 저장/색인/메타 (원자성 향상 필요 시 leveldb.Batch 사용 고려)
-	if err := saveBlockToDB(newBlock); err != nil {
-		http.Error(w, "save block error", http.StatusInternalServerError)
-		return
-	}
-	if err := updateIndicesForBlock(newBlock); err != nil {
-		http.Error(w, "update indices error", http.StatusInternalServerError)
-		return
-	}
-	if err := setLatestHeight(newBlock.Index); err != nil {
-		http.Error(w, "set height error", http.StatusInternalServerError)
-		return
-	}
-
-	log.Printf("[P2P] Block accepted: #%d | Hash=%s | Entries=%d\n",
-		newBlock.Index, newBlock.BlockHash, len(newBlock.Entries))
-
-	// gossip 재전파 (선택)
-	go broadcastBlock(newBlock)
-
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte("block accepted"))
-}
-
-// -----------------------------------------------------------------------------
 // 체인 동기화: 원격 노드 /blocks (페이지네이션) 기반으로 로컬의 뒤쪽만 채움
 // - 원격 total <= 로컬 total : up-to-date
 // - 원격 total > 로컬 total : 로컬 height+1 부터 순서대로 검증/append
@@ -161,6 +69,7 @@ type blocksPage struct {
 	Items  []LowerBlock `json:"items"`
 }
 
+// 입력받은 주소의 노드에게 장부 정보를 제공받는 함수
 func syncChain(peer string) {
 	// 로컬 상태
 	chainMu.Lock()
