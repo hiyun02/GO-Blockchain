@@ -68,7 +68,7 @@ func triggerNetworkMining(prevHash, merkleRoot string, index int) {
 	for _, peer := range peersSnapshot() {
 		go func(addr string) {
 			// 자기 자신은 바로 mineBlock() 실행
-			if addr == selfAddr {
+			if addr == self {
 				go func() {
 					result := mineBlock(prevHash, merkleRoot, index, GlobalDifficulty)
 					if result.BlockHash == "" {
@@ -159,7 +159,7 @@ func broadcastBlock(res MineResult, entries any) {
 	})
 	for _, peer := range peersSnapshot() {
 		go func(addr string) {
-			if addr == selfAddr {
+			if addr == self {
 				return
 			}
 			http.Post("http://"+addr+"/receive", "application/json", strings.NewReader(string(body)))

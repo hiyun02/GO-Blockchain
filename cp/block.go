@@ -11,7 +11,6 @@ package main
 // LowerBlock : CP 체인에서 사용하는 블록 구조체
 // --------------------------------------------------
 // - 하나의 블록은 여러 개의 ContentRecord(entries)를 포함
-// - PBFT 기반이므로 PoW 없음 (확정형 체인)
 // - MerkleRoot는 블록 내 콘텐츠 무결성 보장을 위해 계산됨
 type LowerBlock struct {
 	Index      int             `json:"index"`       // 블록 번호

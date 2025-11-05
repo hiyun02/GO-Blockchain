@@ -150,10 +150,10 @@ func RegisterAPI(mux *http.ServeMux, chain *LowerChain) {
 	mux.HandleFunc("/status", func(w http.ResponseWriter, r *http.Request) {
 		h, _ := getLatestHeight()
 		writeJSON(w, http.StatusOK, map[string]any{
-			"addr":       selfAddr,
+			"addr":       self,
 			"height":     h,
 			"is_boot":    isBoot.Load(),
-			"bootAddr":   bootAddr,
+			"bootAddr":   boot,
 			"started_at": startedAt.Format(time.RFC3339),
 			"peers":      peersSnapshot(),
 		})

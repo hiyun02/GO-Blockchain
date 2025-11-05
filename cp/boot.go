@@ -96,10 +96,10 @@ func registerPeer(w http.ResponseWriter, r *http.Request) {
 
 // 전역 상태 관리 변수
 var (
-	selfAddr   string       // 현재 노드 주소 NODE_ADDR (예: "cp-node-01:5000")
+	self       string       // 현재 노드 주소 NODE_ADDR (예: "cp-node-01:5000")
+	boot       string       // 현재 네트워크 상의 부트노드 주소
 	startedAt  = time.Now() // 현재 노드 시작 시간
 	isBoot     atomic.Bool  // 현재 노드가 부트노드인지 여부
-	bootAddr   string       // 현재 네트워크 상의 부트노드 주소
 	bootAddrMu sync.RWMutex // 부트노드 주소 접근 시 동시성 보호용 RW 잠금 객체
 )
 
@@ -139,7 +139,7 @@ func probeStatus(addr string) (nodeStatus, bool) {
 func electAndSwitch() {
 	// 후보: peers + self
 	cand := peersSnapshot()
-	cand = append(cand, selfAddr)
+	cand = append(cand, self)
 
 	// 상태 수집
 	type info struct {
@@ -181,8 +181,8 @@ func electAndSwitch() {
 	// 살아있는 노드가 없다면 자기 자신을 부트로 승격
 	if len(live) == 0 {
 		isBoot.Store(true)
-		setBootAddr(selfAddr)
-		log.Printf("[BOOT] no live peers; self-promoted as boot: %s", selfAddr)
+		setBootAddr(self)
+		log.Printf("[BOOT] no live peers; self-promoted as boot: %s", self)
 		return
 	}
 
@@ -195,10 +195,10 @@ func electAndSwitch() {
 		}
 	}
 
-	if winner.Addr == selfAddr {
+	if winner.Addr == self {
 		isBoot.Store(true)
-		setBootAddr(selfAddr)
-		broadcastNewBoot(selfAddr)
+		setBootAddr(self)
+		broadcastNewBoot(self)
 		log.Printf("[BOOT] elected as new bootnode (height=%d)", winner.Height)
 	} else {
 		isBoot.Store(false)
@@ -243,12 +243,12 @@ func bootNotify(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 상태 반영
-	isBoot.Store(in.Addr == selfAddr)
+	isBoot.Store(in.Addr == self)
 	setBootAddr(in.Addr)
 
 	// 성공 로그 출력
-	if in.Addr == selfAddr {
-		log.Printf("[BOOT] this node (%s) is now the bootnode", selfAddr)
+	if in.Addr == self {
+		log.Printf("[BOOT] this node (%s) is now the bootnode", self)
 	} else {
 		log.Printf("[BOOT] updated bootnode: %s", in.Addr)
 	}
@@ -258,11 +258,11 @@ func bootNotify(w http.ResponseWriter, r *http.Request) {
 
 func setBootAddr(addr string) {
 	bootAddrMu.Lock()
-	bootAddr = addr
+	boot = addr
 	bootAddrMu.Unlock()
 }
 func getBootAddr() string {
 	bootAddrMu.RLock()
 	defer bootAddrMu.RUnlock()
-	return bootAddr
+	return boot
 }

@@ -17,8 +17,8 @@ func main() {
 	addr := getEnvDefault("PORT", "5000")
 	addr = ":" + addr
 
-	boot := getEnvDefault("BOOTSTRAP_ADDR", "cp-boot") // 부트노드 고정주소
-	self := getEnvDefault("NODE_ADDR", "cp-node-00")   // 이 노드의 외부접속 주소
+	boot = getEnvDefault("BOOTSTRAP_ADDR", "cp-boot:5000") // 부트노드 고정주소
+	self = getEnvDefault("NODE_ADDR", "cp-node-00:5000")   // 이 노드의 외부접속 주소
 
 	// 2) DB 초기화
 	initDB(dbPath)
@@ -91,7 +91,7 @@ func main() {
 
 			// 초기 체인 동기화(부트노드로부터)
 			go syncChain(boot)
-			log.Printf("[BOOT] joined via %s; peers=%v", boot, reg.Peers)
+			log.Printf("[BOOT] Chain Initialized by %s(boot node); peers=%v", boot, reg.Peers)
 		}()
 	} else {
 		log.Println("[BOOT] skipping auto-join (BOOTSTRAP_ADDR or NODE_ADDR empty)")

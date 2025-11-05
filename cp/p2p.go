@@ -220,7 +220,7 @@ func checkAddress(address string) bool {
 	return answer
 }
 
-// 노드를 주소 목록에서 삭제 함수
+// 노드를 주소 목록에서 삭제하는 함수
 func removePeer(addr string) {
 	peerMu.Lock()
 	defer peerMu.Unlock()
@@ -238,7 +238,7 @@ func removePeer(addr string) {
 	delete(peerAliveMap, addr)
 	aliveMu.Unlock()
 
-	log.Printf("[PEER] removed: %s", addr)
+	log.Printf("[WATCHER] Dead Pear removed: %s", addr)
 }
 
 // 특정 노드 주소와 상태를 입력받아 기록
@@ -260,7 +260,7 @@ func startNetworkWatcher() {
 		}
 
 		for _, addr := range peersSnapshot() {
-			if addr == selfAddr {
+			if addr == self {
 				continue
 			}
 
@@ -272,12 +272,12 @@ func startNetworkWatcher() {
 
 			// 응답 없음 -> 제거 및 aliveMap 갱신
 			markAlive(addr, false)
-			log.Printf("[PEER] removing dead node: %s", addr)
+			log.Printf("[Watcher] Trying to remove dead node: %s", addr)
 			removePeer(addr)
 
 			// 만약 죽은 노드가 부트노드였다면
 			if addr == currentBoot {
-				log.Printf("[BOOT] bootnode %s is dead → starting re-election", addr)
+				log.Printf("[Watcher] bootnode %s is dead -> starting re-election", addr)
 				electAndSwitch()
 			}
 		}
