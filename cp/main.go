@@ -94,7 +94,8 @@ func main() {
 			log.Printf("[BOOT] Chain Initialized by %s(boot node); peers=%v", boot, reg.Peers)
 		}()
 	} else {
-		log.Println("[BOOT] skipping auto-join (BOOTSTRAP_ADDR or NODE_ADDR empty)")
+		log.Println("[BOOT] This is Boot Node, skipping auto-join")
+		isBoot.Store(true)
 	}
 
 	// 7) 네트워크 감시 루틴 실행

@@ -58,35 +58,60 @@ func validHash(hash string, difficulty int) bool {
 }
 
 // 네트워크 전체 노드에게 채굴 요청 전달
-func triggerNetworkMining(prevHash, merkleRoot string, index int) {
+// 네트워크 전체 노드에게 채굴 요청 전달 (부트노드가 최초로 실행)
+func triggerNetworkMining() {
+	// 현재 마지막 블록을 LevelDB에서 조회
+	prevH, ok := getLatestHeight()
+	if !ok {
+		log.Printf("[POW] No previous block found (genesis only)")
+		return
+	}
+	prev, err := getBlockByIndex(prevH)
+	if err != nil {
+		log.Printf("[POW] Failed to load previous block: %v", err)
+		return
+	}
+
+	// 채굴 대상 블록 정보 구성
+	index := prev.Index + 1
+	prevHash := prev.BlockHash
+
+	// 아직 블록 안에 담을 트랜잭션(Entries)이 없다면 빈 리스트로
+	entries := []ContentRecord{}
+	leaf := make([]string, len(entries))
+	for i, r := range entries {
+		leaf[i] = hashContentRecord(r)
+	}
+	merkleRoot := merkleRootHex(leaf)
+
 	reqBody, _ := json.Marshal(map[string]any{
 		"prev_hash":   prevHash,
 		"merkle_root": merkleRoot,
 		"index":       index,
 	})
 
+	log.Printf("[POW] Starting mining for block #%d (prev=%s...)", index, prevHash[:8])
+
+	// 네트워크 내 모든 노드에게 채굴 요청 전달
 	for _, peer := range peersSnapshot() {
 		go func(addr string) {
-			// 자기 자신은 바로 mineBlock() 실행
 			if addr == self {
-				go func() {
-					result := mineBlock(prevHash, merkleRoot, index, GlobalDifficulty)
-					if result.BlockHash == "" {
-						log.Printf("[MINE] ⛏️ self mining aborted (index=%d)", index)
-						return
-					}
-					log.Printf("[MINE] self mined block: %s", result.BlockHash)
-					broadcastBlock(result, nil)
-				}()
-				return
+				return // 자기 자신에게는 전달할 필요 없음
 			}
-
-			// 다른 노드들은 /mine/start 요청을 통해 PoW 수행하도록 지시함
 			http.Post("http://"+addr+"/mine/start", "application/json", strings.NewReader(string(reqBody)))
 		}(peer)
 	}
 
-	log.Printf("[NETWORK] Mining request broadcast complete (index=%d)", index)
+	// 자기 자신도 채굴 시작
+	go func() {
+		result := mineBlock(prevHash, merkleRoot, index, GlobalDifficulty)
+		if result.BlockHash == "" {
+			log.Printf("[POW] This Node mining aborted (index=%d)", index)
+			return
+		}
+		log.Printf("[POW] This Node mined block #%d hash=%s", index, result.BlockHash[:12])
+		broadcastBlock(result, entries)
+	}()
 }
 
 // 네트워크 내 각 노드가 채굴을 요청받아 시작
