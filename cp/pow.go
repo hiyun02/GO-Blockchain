@@ -58,97 +58,60 @@ func validHash(hash string, difficulty int) bool {
 }
 
 // 네트워크 전체 노드에게 채굴 요청 전달
-// 네트워크 전체 노드에게 채굴 요청 전달 (부트노드가 최초로 실행)
 func triggerNetworkMining() {
-	// 현재 마지막 블록을 LevelDB에서 조회
+	for _, peer := range peersSnapshot() {
+		go func(addr string) {
+			http.Post("http://"+addr+"/mine/start", "application/json", nil)
+		}(peer)
+	}
+	log.Printf("[PoW][NETWORK] Broadcasted mining start to all peers")
+}
+
+// 각 노드에서 채굴 요청 수신 및 채굴 수행
+func handleMineStart(w http.ResponseWriter, r *http.Request) {
+	log.Printf("[PoW][NODE] Received mining start signal")
+
+	go func() {
+		result := mineBlock(GlobalDifficulty)
+		if result.BlockHash == "" {
+			log.Printf("[PoW][NODE] Mining aborted")
+			return
+		}
+		log.Printf("[PoW][NODE] ✅ Mined block #%d hash=%s", result.Header.Index, result.BlockHash[:12])
+		broadcastBlock(result, nil)
+	}()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "mining started"})
+}
+
+// PoW 채굴 수행
+// 항상 현재 로컬 체인 상태 기반으로 시작
+func mineBlock(difficulty int) MineResult {
+	miningStop.Store(false)
+
+	// LevelDB 장부에서 현재 마지막 블록 조회
 	prevH, ok := getLatestHeight()
 	if !ok {
-		log.Printf("[POW] No previous block found (genesis only)")
-		return
+		log.Printf("[PoW] No previous block found (genesis only)")
+		return MineResult{}
 	}
 	prev, err := getBlockByIndex(prevH)
 	if err != nil {
-		log.Printf("[POW] Failed to load previous block: %v", err)
-		return
+		log.Printf("[PoW] Failed to load previous block: %v", err)
+		return MineResult{}
 	}
 
-	// 채굴 대상 블록 정보 구성
+	// 새로운 블록 헤더 구성
 	index := prev.Index + 1
 	prevHash := prev.BlockHash
 
-	// 아직 블록 안에 담을 트랜잭션(Entries)이 없다면 빈 리스트로
 	entries := []ContentRecord{}
 	leaf := make([]string, len(entries))
 	for i, r := range entries {
 		leaf[i] = hashContentRecord(r)
 	}
 	merkleRoot := merkleRootHex(leaf)
-
-	reqBody, _ := json.Marshal(map[string]any{
-		"prev_hash":   prevHash,
-		"merkle_root": merkleRoot,
-		"index":       index,
-	})
-
-	log.Printf("[POW] Starting mining for block #%d (prev=%s...)", index, prevHash[:8])
-
-	// 네트워크 내 모든 노드에게 채굴 요청 전달
-	for _, peer := range peersSnapshot() {
-		go func(addr string) {
-			if addr == self {
-				return // 자기 자신에게는 전달할 필요 없음
-			}
-			http.Post("http://"+addr+"/mine/start", "application/json", strings.NewReader(string(reqBody)))
-		}(peer)
-	}
-
-	// 자기 자신도 채굴 시작
-	go func() {
-		result := mineBlock(prevHash, merkleRoot, index, GlobalDifficulty)
-		if result.BlockHash == "" {
-			log.Printf("[POW] This Node mining aborted (index=%d)", index)
-			return
-		}
-		log.Printf("[POW] This Node mined block #%d hash=%s", index, result.BlockHash[:12])
-		broadcastBlock(result, entries)
-	}()
-}
-
-// 네트워크 내 각 노드가 채굴을 요청받아 시작
-// GET /mine/start
-func handleMineStart(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		PrevHash   string `json:"prev_hash"`
-		MerkleRoot string `json:"merkle_root"`
-		Index      int    `json:"index"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid JSON", http.StatusBadRequest)
-		return
-	}
-	defer r.Body.Close()
-
-	log.Printf("[MINER] Received mining start command (index=%d)", req.Index)
-
-	go func() {
-		result := mineBlock(req.PrevHash, req.MerkleRoot, req.Index, GlobalDifficulty)
-		if result.BlockHash == "" {
-			log.Printf("[MINER] Mining aborted (index=%d)", req.Index)
-			return
-		}
-		log.Printf("[MINER] Mined block: %s", result.BlockHash)
-		broadcastBlock(result, nil)
-	}()
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
-		"status": "mining started",
-	})
-}
-
-// PoW 블록 채굴 수행
-func mineBlock(prevHash, merkleRoot string, index, difficulty int) MineResult {
-	miningStop.Store(false) // 초기화
 
 	header := PoWHeader{
 		Index:      index,
@@ -158,21 +121,22 @@ func mineBlock(prevHash, merkleRoot string, index, difficulty int) MineResult {
 		Difficulty: difficulty,
 	}
 
-	nonce := rand.Intn(10000) // 무작위 시작점
+	log.Printf("[PoW] Starting mining (index=%d prev=%s...)", index, prevHash[:8])
+
+	// Nonce 탐색
+	nonce := rand.Intn(10000)
 	var hash string
 
 	for !miningStop.Load() {
 		header.Nonce = nonce
 		hash = computeHashForPoW(header)
-
 		if validHash(hash, difficulty) {
-			log.Printf("[MINER] Success: index=%d nonce=%d hash=%s", index, nonce, hash)
+			log.Printf("[PoW] Success index=%d nonce=%d hash=%s", index, nonce, hash)
 			return MineResult{BlockHash: hash, Nonce: nonce, Header: header}
 		}
 		nonce++
 	}
-
-	return MineResult{} // 다른 노드 성공 시 중단
+	return MineResult{} // 다른 노드가 성공 시 중단
 }
 
 // 채굴 성공 시 네트워크로 블록 전파
@@ -190,7 +154,7 @@ func broadcastBlock(res MineResult, entries any) {
 			http.Post("http://"+addr+"/receive", "application/json", strings.NewReader(string(body)))
 		}(peer)
 	}
-	log.Printf("[P2P][POW][BROADCAST] Winner sent NewBlock to peers: index=%d hash=%s", res.Header.Index, res.BlockHash)
+	log.Printf("[PoW][P2P][BROADCAST] Winner sent NewBlock to peers: index=%d hash=%s", res.Header.Index, res.BlockHash)
 }
 
 // PoW 수행 중 승자노드로부터 신규 블록 수신하면 검증한 후 체인에 추가함
@@ -212,14 +176,14 @@ func receive(w http.ResponseWriter, r *http.Request) {
 
 	// PoW 유효성 검증
 	if !validHash(msg.Hash, msg.Header.Difficulty) {
-		log.Printf("[BLOCK] Invalid hash rejected: index=%d", msg.Header.Index)
+		log.Printf("[PoW][BLOCK] Invalid hash rejected: index=%d", msg.Header.Index)
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
 
 	// 체인에 추가
 	addBlockToChain(msg.Header, msg.Hash, msg.Entries)
-	log.Printf("[CHAIN] Block accepted: index=%d hash=%s", msg.Header.Index, msg.Hash)
+	log.Printf("[PoW][CHAIN] Block accepted: index=%d hash=%s", msg.Header.Index, msg.Hash)
 	w.WriteHeader(http.StatusOK)
 }
 

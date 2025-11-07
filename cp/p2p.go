@@ -250,12 +250,12 @@ func markAlive(addr string, status bool) {
 
 // 네트워크 감시 루틴(전체 노드 생존 여부 확인)
 func startNetworkWatcher() {
-	log.Printf("[Watcher] starting network watcher")
+	log.Printf("[WATCHER] starting network watcher")
 	t := time.NewTicker(10 * time.Second)
 	defer t.Stop()
 
 	for range t.C {
-		log.Printf("[Watcher] Conduct the Watcher's inspection")
+		log.Printf("[WATCHER] Conduct the Watcher's inspection")
 		currentBoot := getBootAddr()
 		if currentBoot == "" {
 			continue
@@ -274,12 +274,12 @@ func startNetworkWatcher() {
 
 			// 응답 없음 -> 제거 및 aliveMap 갱신
 			markAlive(addr, false)
-			log.Printf("[Watcher] Trying to remove dead node: %s", addr)
+			log.Printf("[WATCHER] Trying to remove dead node: %s", addr)
 			removePeer(addr)
 
 			// 만약 죽은 노드가 부트노드였다면
 			if addr == currentBoot {
-				log.Printf("[Watcher] bootnode %s is dead -> starting re-election", addr)
+				log.Printf("[WATCHER] bootnode %s is dead -> starting re-election", addr)
 				electAndSwitch()
 			}
 		}
