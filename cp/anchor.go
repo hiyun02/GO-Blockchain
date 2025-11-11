@@ -16,6 +16,14 @@ import (
 	"time"
 )
 
+////////////////////////////////////////////////////////////////////////////////
+// Anchor
+// ------------------------------------------------------------
+// CP(Content Provider) 체인에서 생성되는 블록 단위 구조체
+// 하나의 블록은 여러 ContentRecord(Entries)를 포함하고,
+// 그 해시들을 기반으로 Merkle Root를 계산하여 블록 헤더에 저장
+////////////////////////////////////////////////////////////////////////////////
+
 // 개인키, 공개키 자동 생성 (최초 실행 시)
 func ensureKeyPair() {
 	if _, ok := getMeta("meta_cp_privkey"); ok {
@@ -61,7 +69,7 @@ func makeAnchorSignature(privPem string, root string, ts int64) string {
 	return hex.EncodeToString(sig)
 }
 
-// OTT로 MerkleRoot 제출
+// OTT로 MerkleRoot 제출 (부트노드에서만 실행됨)
 func submitAnchor(block LowerBlock) {
 	ensureKeyPair() // 키 없으면 생성
 	privPem, _ := getMeta("meta_cp_privkey")
@@ -71,7 +79,7 @@ func submitAnchor(block LowerBlock) {
 
 	req := map[string]any{
 		"cp_id":   selfID(),
-		"cp_addr": self, // ex: "cp-node-01:5000"
+		"cp_boot": self, // ex: "cp-boot:5000"
 		"root":    block.MerkleRoot,
 		"ts":      ts,
 		"sig":     sig,

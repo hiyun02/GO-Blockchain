@@ -40,15 +40,17 @@ func main() {
 	//     - /addPeer : 기존 노드들이 신규 노드를 추가
 	//	   - /mine/start : 노드 간 채굴 요청 전파
 	//     - /receive : 다른 노드가 보낸 확정 블록 수신
-	//	   - /register : 부트노드 연결 및 네트워크 연결
+	//	   - /register : 부트노드가 신규노드를 네트워크에 참여시킴
 	//	   - /bootNotify : 부트노드 변경 수신
-	//	   - /addAnchor : CP 체인으로부터 Anchor 수신
+	//	   - /addAnchor : CP 체인으로부터 Anchor 수신, 해당 CP의 부트노드 주소를 다른 OTT 노드에 전파
+	//	   - /cpBootNotify : OTT 부트노드로부터 전파된 CP 부트노드 주소를 수신
 	mux.HandleFunc("/addPeer", addPeer)
 	mux.HandleFunc("/mine/start", handleMineStart)
 	mux.HandleFunc("/receive", receive)
 	mux.HandleFunc("/register", registerPeer)
 	mux.HandleFunc("/bootNotify", bootNotify)
 	mux.HandleFunc("/addAnchor", addAnchor)
+	mux.HandleFunc("/cpBootNotify", cpBootNotify)
 
 	// 5) 서버 시작
 	go func() {

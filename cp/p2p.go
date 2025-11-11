@@ -203,7 +203,7 @@ func addPeerInternal(addr string) bool {
 func peersSnapshot() []string {
 	peerMu.Lock()
 	defer peerMu.Unlock()
-	out := make([]string, len(peers)) // nil 방지 (빈이면 [])
+	out := make([]string, len(peers)) // nil 방지 (비어있으면 [])
 	copy(out, peers)
 	return out
 }

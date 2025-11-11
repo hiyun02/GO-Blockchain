@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -19,14 +20,22 @@ type UpperChain struct {
 	ottID          string
 	difficulty     int
 	pendingAnchors map[string]string // 아직 블록에 포함되지 않은 CP 루트 (CPID => Root)
-	pendingMu             sync.Mutex
-	lastBlockTime  time.Time         // 마지막 블록 생성 시각
+	pendingMu      sync.Mutex
+	lastBlockTime  time.Time // 마지막 블록 생성 시각
 }
 
-// 블록 생성 기준
+// 전역 상태 관리 변수
 var (
-	ch            *UpperChain
-	BlockInterval = 30 * time.Second // 30초마다 블록 생성 시도
+	self          string                    // 현재 노드 주소 NODE_ADDR (예: "cp-node-01:5000")
+	boot          string                    // 현재 네트워크 상의 부트노드 주소
+	startedAt     = time.Now()              // 현재 노드 시작 시간
+	isBoot        atomic.Bool               // 현재 노드가 부트노드인지 여부
+	bootAddrMu    sync.RWMutex              // 부트노드 주소 접근 시 동시성 보호용 RW 잠금 객체
+	ch            *UpperChain               // 체인 접근을 위한 전역변수
+	BlockInterval = 30 * time.Second        // 블록 채굴 기준 (30초마다 블록 생성 시도)
+	cpBootMap     = make(map[string]string) // OTT 부트노드와 연결될 CP 체인들의 부트노드 주소록
+	cpBootMapMu   sync.RWMutex              // cpBootMap 접근 시 동시성 보호용 RW 잠금 객체
+
 )
 
 // 체인 초기화

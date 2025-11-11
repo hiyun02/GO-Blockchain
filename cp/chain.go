@@ -4,6 +4,9 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
 )
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -17,6 +20,17 @@ type LowerChain struct {
 	cpID       string
 	difficulty int // 체인 난이도 (모든 노드 동일)
 }
+
+// 전역 상태 관리 변수
+var (
+	self       string       // 현재 노드 주소 NODE_ADDR (예: "cp-node-01:5000")
+	boot       string       // 현재 네트워크 상의 부트노드 주소
+	startedAt  = time.Now() // 현재 노드 시작 시간
+	isBoot     atomic.Bool  // 현재 노드가 부트노드인지 여부
+	bootAddrMu sync.RWMutex // 부트노드 주소 접근 시 동시성 보호용 RW 잠금 객체
+	ottBoot    string       // ott 체인의 부트노드 주소 (예 : "ott-node-01:5000")
+	ottBootMu  sync.RWMutex // ottBoot 접근 시 동시성 보호용 RW 잠금 객체
+)
 
 // 체인 초기화 및 제네시스 확인
 func newLowerChain(cpID string) (*LowerChain, error) {
@@ -115,8 +129,11 @@ func onBlockReceived(lb LowerBlock) error {
 		return fmt.Errorf("set height: %w", err)
 	}
 
-	// 서명하여 OTT 체인으로 제출
-	submitAnchor(lb)
+	// 부트노드일 경우, 서명하여 OTT 체인으로 제출
+	if self == boot {
+		submitAnchor(lb)
+		logInfo("[BOOT] New Block's Anchor was sent By BootNode")
+	}
 	logInfo("[CHAIN] Accepted New Block #%d (%s)", lb.Index, lb.BlockHash[:12])
 	return nil
 }

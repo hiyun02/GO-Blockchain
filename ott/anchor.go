@@ -14,14 +14,14 @@ import (
 	"net/http"
 )
 
-// OTT에서 CP가 제출한 앵커를 수신하고 검증
+// OTT에서 CP가 제출한 앵커를 수신하고 검증한 후 pending 추가함수 호출(부트노드만 수행)
 func addAnchor(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		CpID   string `json:"cp_id"`
-		CpAddr string `json:"cp_addr"`
-		Root   string `json:"root"`
-		Ts     int64  `json:"ts"`
-		Sig    string `json:"sig"`
+		cpID   string `json:"cp_id"`
+		cpBoot string `json:"cp_boot"`
+		root   string `json:"root"`
+		ts     int64  `json:"ts"`
+		sig    string `json:"sig"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid JSON", 400)
@@ -30,7 +30,7 @@ func addAnchor(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
 	// CP의 공개키 가져오기
-	resp, err := http.Get("http://" + req.CpAddr + "/getPublicKey")
+	resp, err := http.Get("http://" + req.cpBoot + "/getPublicKey")
 	if err != nil {
 		http.Error(w, "failed to fetch public key", 500)
 		return
@@ -40,7 +40,7 @@ func addAnchor(w http.ResponseWriter, r *http.Request) {
 	// CP 노드로부터 전송받은 공개키(PEM 형식)를 전체 읽음
 	pubPem, _ := io.ReadAll(resp.Body)
 
-	// PEM 포맷(-----BEGIN PUBLIC KEY----- ... )을 디코딩하여 DER 형식으로 변환
+	// PEM 포맷(-----BEGIN PUBLIC KEY-----)을 디코딩하여 DER 형식으로 변환
 	block, _ := pem.Decode(pubPem)
 
 	// DER 포맷을 실제 Go에서 사용 가능한 공개키 객체(interface)로 파싱
@@ -51,13 +51,13 @@ func addAnchor(w http.ResponseWriter, r *http.Request) {
 
 	// 서명 검증 과정 시작(ECDSA.Verify)
 	// CP가 서명한 원문 메시지 구성
-	msg := []byte(fmt.Sprintf("%s|%d", req.Root, req.Ts))
+	msg := []byte(fmt.Sprintf("%s|%d", req.root, req.ts))
 
 	// 메시지를 SHA-256으로 해시 (서명은 해시값에 대해 수행됨)
 	hash := sha256.Sum256(msg)
 
 	// CP로부터 전달받은 서명(hex 문자열)을 바이트 배열로 디코딩
-	sigBytes, _ := hex.DecodeString(req.Sig)
+	sigBytes, _ := hex.DecodeString(req.sig)
 
 	// ECDSA 서명은 (r, s) 두 부분으로 나뉘므로 반으로 분할
 	half := len(sigBytes) / 2
@@ -69,18 +69,21 @@ func addAnchor(w http.ResponseWriter, r *http.Request) {
 	sigS := new(big.Int).SetBytes(sBytes)
 
 	// 공개키(pubKey)로 해시(hash[:])와 서명(r,s)을 검증
-	// 유효하면 true 반환 → 정상 서명 (CP가 실제 서명한 것)
+	// 유효하면 true 반환 => 정상 서명 (CP가 실제 서명한 것)
 	valid := ecdsa.Verify(pubKey, hash[:], sigR, sigS)
 
 	if !valid {
 		http.Error(w, "invalid signature", 403)
-		log.Printf("[ANCHOR][INVALID] rejected from %s", req.CpID)
+		log.Printf("[ANCHOR][INVALID] rejected from %s", req.cpID)
 		return
 	}
 
 	// 앵커 저장
-	ch.appendAnchorToPending(req.CpID, req.Root)
-	log.Printf("[ANCHOR][OK] Verified & added anchor from %s", req.CpID)
+	log.Printf("[ANCHOR] Verified & adding anchor from CP Chain ... %s : %s)", req.cpID, req.root)
+	ch.appendAnchorToPending(req.cpID, req.root)
 
+	// 송신한 CP체인의 CPID와 부트노드 주소를 저장한 후 다른 ott 노드에 전파함
+	log.Printf("[ANCHOR] Call broadcastNewCpBoot() for store %s : %s to CpBootMap ... )", req.cpID, req.cpBoot)
+	broadcastNewCpBoot(req.cpID, req.cpBoot)
 	w.WriteHeader(http.StatusOK)
 }

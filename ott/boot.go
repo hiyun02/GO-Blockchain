@@ -7,8 +7,6 @@ import (
 	"net/http"
 	"strings"
 	"sync"
-	"sync/atomic"
-	"time"
 )
 
 // ============================================
@@ -24,7 +22,7 @@ type registerResp struct {
 	Peers []string `json:"peers"`
 }
 
-// 신규노드가 네트워크 진입 시 부트노드에게 다른 노드들의 주소를 제공받기 위한 함수
+// 신규노드가 네트워크 진입 시 부트노드가 다른 노드들의 주소를 제공하는 함수
 func registerPeer(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -94,15 +92,6 @@ func registerPeer(w http.ResponseWriter, r *http.Request) {
 // 부트노드 상태 관리 소스
 // ============================================
 
-// 전역 상태 관리 변수
-var (
-	self       string       // 현재 노드 주소 NODE_ADDR (예: "cp-node-01:5000")
-	boot       string       // 현재 네트워크 상의 부트노드 주소
-	startedAt  = time.Now() // 현재 노드 시작 시간
-	isBoot     atomic.Bool  // 현재 노드가 부트노드인지 여부
-	bootAddrMu sync.RWMutex // 부트노드 주소 접근 시 동시성 보호용 RW 잠금 객체
-)
-
 // 노드 상태 구조체, /status API 호출 시 응답받는 JSON 구조
 type nodeStatus struct {
 	Addr   string   `json:"addr"`    // 노드 주소
@@ -134,6 +123,8 @@ func probeStatus(addr string) (nodeStatus, bool) {
 // 네트워크 상의 모든 노드(peers + self)를 조사
 // 1) 가장 높은 블록 높이를 가진 노드를 찾음
 // 2) 동률이면 주소 사전순으로 가장 앞선 노드를 부트노드로 지정
+// 3) 선출된 부트노드는 다른 ott노드들에게 자신의 주소를 전파
+// 4) 선출된 부트노드는 CP 부트노드들에게 자신의 주소를 전파
 // 현재 노드가 그 승자라면 => self를 부트노드로 승격
 // 그렇지 않으면 => 해당 승자를 부트노드로 인식
 func electAndSwitch() {
@@ -194,11 +185,12 @@ func electAndSwitch() {
 			winner = x
 		}
 	}
-
+	// 자신이 승자노드가 된 경우, 다른 ott 노드들과 cp 부트노드들에게 자신의 주소 전파
 	if winner.Addr == self {
 		isBoot.Store(true)
 		setBootAddr(self)
-		broadcastNewBoot(self)
+		broadcastNewBoot(self) // 다른 ott 노드들에게 전파
+		broadcastNewBootToCp(self)
 		log.Printf("[BOOT] elected as new bootnode (height=%d)", winner.Height)
 	} else {
 		isBoot.Store(false)
@@ -207,7 +199,7 @@ func electAndSwitch() {
 	}
 }
 
-// 자신이 새 부트노드로 선출되었을 때 다른 모든 피어들에게 전파
+// 자신이 새 부트노드로 선출되었을 때, 다른 모든 피어들에게 전파
 func broadcastNewBoot(newBoot string) {
 	for _, p := range peersSnapshot() {
 		go func(dst string) {
@@ -221,6 +213,7 @@ func broadcastNewBoot(newBoot string) {
 }
 
 // 부트노드 변경 수신(모든 노드 수행)
+// POST : /bootNotify
 func bootNotify(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", 405)
@@ -256,6 +249,70 @@ func bootNotify(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(200)
 }
 
+// 자신이 새 OTT 부트노드로 선출되었을 때, 기존에 등록된 모든 CP 부트노드들에게 전파
+func broadcastNewBootToCp(newBoot string) {
+	for cpID, cpBoot := range cpBootMap {
+		go func(id, dst string) {
+			log.Printf("[BOOT][ToCP] New OTT Boot Node's Addr is now sending to : %s", dst)
+			body, _ := json.Marshal(map[string]string{"ott_boot": newBoot})
+			_, err := http.Post("http://"+dst+"/chgOttBoot", "application/json", strings.NewReader(string(body)))
+			if err != nil {
+				log.Printf("[BOOT] notify failed to %s: %v", dst, err)
+			}
+		}(cpID, cpBoot)
+	}
+	log.Printf("[BOOT][OTTtoCP] New OTT Boot Node's Addr was sent to Cp Boot Nodes")
+}
+
+// 신규 CP체인의 부트노드가 앵커를 제출했을 때, 이를 저장한 후 다른 ott 노드에게 전파
+func broadcastNewCpBoot(cpID, cpBoot string) {
+	// 부트노드 자신에게 신규 cp 부트노드 주소 저장
+	logInfo("[BOOT] Store newCpBoot to CpBootMap")
+	setCpBootAddr(cpID, cpBoot)
+	// 나머지 ott 노드들에게 cp 부트노드 주소 전파
+	for _, peer := range peersSnapshot() {
+		go func(dst string) {
+			body, _ := json.Marshal(map[string]string{"cp_id": cpID, "cp_boot": cpBoot})
+			logInfo("[BOOT] notify new cpBoot to %s", dst)
+			_, err := http.Post("http://"+dst+"/cpBootNotify", "application/json", strings.NewReader(string(body)))
+			if err != nil {
+				log.Printf("[BOOT] notify failed to %s: %v", dst, err)
+			}
+		}(peer)
+	}
+	log.Printf("[BOOT][NETWORK] Complete Broadcasting New CP Boot : %s", cpBoot)
+}
+
+// 신규 CP의 CpID 및 부트노드 주소 수신(ott 모든 노드 수행)
+// POST : /cpBootNotify
+func cpBootNotify(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+	// 응답 파싱할 구조체
+	var in struct {
+		cpID   string `json:"cp_id"`
+		cpBoot string `json:"cp_boot"`
+	}
+	// 요청 본문이 유효한 JSON이 아니거나 주소 필드가 비어 있다면 잘못된 요청으로 간주
+	if json.NewDecoder(r.Body).Decode(&in) != nil || in.cpBoot == "" {
+		http.Error(w, "bad body", 400)
+		return
+	}
+	// 전달받은 부트노드 주소가 실제로 살아있는지 검증
+	if _, ok := probeStatus(in.cpBoot); !ok {
+		http.Error(w, "boot not reachable", 502)
+		log.Printf("[BOOT] received new boot addr (%s) but not reachable", in.cpBoot)
+		return
+	}
+	// CP 체인의 ID와 부트노드 주소 저장
+	setCpBootAddr(in.cpID, in.cpBoot)
+	// 성공 로그 출력
+	log.Printf("[BOOT] Successfully received cpBoot: %s : %s to CpBootMap )", in.cpID, in.cpBoot)
+	w.WriteHeader(200)
+}
+
 func setBootAddr(addr string) {
 	bootAddrMu.Lock()
 	boot = addr
@@ -265,4 +322,16 @@ func getBootAddr() string {
 	bootAddrMu.RLock()
 	defer bootAddrMu.RUnlock()
 	return boot
+}
+
+func setCpBootAddr(cpID, addr string) {
+	cpBootMapMu.Lock()
+	cpBootMap[cpID] = addr
+	cpBootMapMu.Unlock()
+	logInfo("[BOOT] set new CpBoot addr to CpBootMap: %s", addr)
+}
+func getCpBootAddr(cpID string) string {
+	cpBootMapMu.RLock()
+	defer cpBootMapMu.RUnlock()
+	return cpBootMap[cpID]
 }

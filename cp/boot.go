@@ -7,8 +7,6 @@ import (
 	"net/http"
 	"strings"
 	"sync"
-	"sync/atomic"
-	"time"
 )
 
 // ============================================
@@ -89,16 +87,6 @@ func registerPeer(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(registerResp{Peers: out})
 }
-
-// 전역 상태 관리 변수
-var (
-	self       string       // 현재 노드 주소 NODE_ADDR (예: "cp-node-01:5000")
-	boot       string       // 현재 네트워크 상의 부트노드 주소
-	startedAt  = time.Now() // 현재 노드 시작 시간
-	isBoot     atomic.Bool  // 현재 노드가 부트노드인지 여부
-	bootAddrMu sync.RWMutex // 부트노드 주소 접근 시 동시성 보호용 RW 잠금 객체
-	ottBoot    string       // ott 체인의 부트노드 주소 (예 : "ott-node-01:5000")
-)
 
 // ============================================
 // 부트노드 상태 관리 소스
@@ -253,7 +241,80 @@ func bootNotify(w http.ResponseWriter, r *http.Request) {
 	} else {
 		log.Printf("[BOOT] updated bootnode: %s", in.Addr)
 	}
+	w.WriteHeader(200)
+}
 
+// CP 부트노드가 OTT 부트노드 변경 수신
+// POST /chgOttBoot
+func chgOttBoot(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+	// 응답 파싱할 구조체
+	var in struct {
+		ottAddr string `json:"addr"`
+	}
+	// 요청 본문이 유효한 JSON이 아니거나 addr 필드가 비어 있다면 잘못된 요청으로 간주
+	if json.NewDecoder(r.Body).Decode(&in) != nil || in.ottAddr == "" {
+		http.Error(w, "bad body", 400)
+		return
+	}
+	// 전달받은 부트노드 주소가 실제로 살아있는지 검증
+	if _, ok := probeStatus(in.ottAddr); !ok {
+		http.Error(w, "boot not reachable", 502)
+		log.Printf("[BOOT] received new OTT Boot addr (%s) but not reachable", in.ottAddr)
+		return
+	}
+
+	// 전역변수에 반영 및 전파
+	setOttBoot(in.ottAddr)
+	log.Printf("[BOOT] this node (%s) is new OTT bootnode now", in.ottAddr)
+	broadcastNewOTTBoot(in.ottAddr)
+	w.WriteHeader(200)
+}
+
+// OTT 부트노드 주소를 수신한 후 다른 모든 피어들에게 전파
+func broadcastNewOTTBoot(ottBoot string) {
+	for _, p := range peersSnapshot() {
+		go func(dst string) {
+			log.Printf("[BOOT][OTT] CPBOOT is now sending New OTTBootNode's Addr to : %s", dst)
+			body, _ := json.Marshal(map[string]string{"addr": ottBoot})
+			_, err := http.Post("http://"+dst+"/ottBootNotify", "application/json", strings.NewReader(string(body)))
+			if err != nil {
+				log.Printf("[BOOT] notify failed to %s: %v", dst, err)
+			}
+		}(p)
+	}
+}
+
+// 부트노드 변경 수신(모든 노드 수행)
+// POST : /ottBootNotify
+func ottBootNotify(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+	// 응답 파싱할 구조체
+	var in struct {
+		ottAddr string `json:"addr"`
+	}
+	// 요청 본문이 유효한 JSON이 아니거나 addr 필드가 비어 있다면 잘못된 요청으로 간주
+	if json.NewDecoder(r.Body).Decode(&in) != nil || in.ottAddr == "" {
+		http.Error(w, "bad body", 400)
+		return
+	}
+	// 전달받은 ott 부트노드 주소가 실제로 살아있는지 검증
+	if _, ok := probeStatus(in.ottAddr); !ok {
+		http.Error(w, "boot not reachable", 502)
+		log.Printf("[BOOT] received new boot addr (%s) but not reachable", in.ottAddr)
+		return
+	}
+
+	// 전역변수에 반영
+	setOttBoot(in.ottAddr)
+	// 성공 로그 출력
+	log.Printf("[BOOT] this node (%s) is new OTT bootnode now", in.ottAddr)
 	w.WriteHeader(200)
 }
 
@@ -266,4 +327,14 @@ func getBootAddr() string {
 	bootAddrMu.RLock()
 	defer bootAddrMu.RUnlock()
 	return boot
+}
+func setOttBoot(addr string) {
+	ottBootMu.Lock()
+	ottBoot = addr
+	ottBootMu.Unlock()
+}
+func getOttBoot() string {
+	ottBootMu.RLock()
+	defer ottBootMu.RUnlock()
+	return ottBoot
 }

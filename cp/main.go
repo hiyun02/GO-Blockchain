@@ -44,12 +44,16 @@ func main() {
 	//	   - /register : 부트노드 연결 및 네트워크 연결
 	//	   - /bootNotify : 부트노드 변경 수신
 	//	   - /getPublicKey : 공개키 반환
+	//	   - /chgOttBoot : 신규 선출된 OTT 부트노드 주소를 CP 부트노드가 수신
+	//	   - /ottBootNotify : CP 부트노드로부터 전파된 OTT 부트노드 주소 수신
 	mux.HandleFunc("/addPeer", addPeer)
 	mux.HandleFunc("/mine/start", handleMineStart)
 	mux.HandleFunc("/receive", receive)
 	mux.HandleFunc("/register", registerPeer)
 	mux.HandleFunc("/bootNotify", bootNotify)
 	mux.HandleFunc("/getPublicKey", getPublicKey)
+	mux.HandleFunc("/chgOttBoot", chgOttBoot)
+	mux.HandleFunc("/ottBootNotify", ottBootNotify)
 
 	// 5) 앵커 서명을 위한 key pair 생성
 	ensureKeyPair()
