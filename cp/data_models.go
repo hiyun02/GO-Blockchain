@@ -7,7 +7,7 @@ package main
 // - ContentRecord  : 콘텐츠 단위 메타데이터
 // - LowerBlock     : CP 체인의 블록 구조 (Merkle Root 포함)
 // - ContractData   : CP-OTT 간 계약 정보
-// - UpperRecord    : OTT 체인에 저장되는 앵커 및 계약 스냅샷
+// - AnchorRecord    : OTT 체인에 저장되는 앵커 및 계약 스냅샷
 // - UpperBlock     : OTT 체인의 블록 구조
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -47,7 +47,7 @@ type ContractData struct {
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-// 3. UpperRecord (OTT 체인의 단일 앵커 레코드)
+// 3. AnchorRecord (OTT 체인의 단일 앵커 레코드)
 // ------------------------------------------------------------
 // OTT 체인에서 하나의 CP에 대해 생성되는 앵커 및 계약 스냅샷 정보.
 // - CPID: 콘텐츠 제공자 ID
@@ -57,7 +57,7 @@ type ContractData struct {
 // - AnchorTimestamp: 앵커가 제출된 시각
 ////////////////////////////////////////////////////////////////////////////////
 
-type UpperRecord struct {
+type AnchorRecord struct {
 	CPID             string       `json:"cp_id"`             // 콘텐츠 제공자 ID
 	ContractSnapshot ContractData `json:"contract_snapshot"` // 계약 상태 스냅샷
 	LowerRoot        string       `json:"lower_root"`        // CP 체인에서 전달된 머클 루트 (서명 포함)
@@ -69,16 +69,19 @@ type UpperRecord struct {
 // 4. UpperBlock (OTT 체인의 블록 구조)
 // ------------------------------------------------------------
 // OTT 체인에서 거버넌스 단위로 생성되는 블록.
-// - 여러 CP의 UpperRecord를 포함할 수 있음.
+// - 여러 CP의 AnchorRecord를 포함할 수 있음.
 // - 계약, 앵커, 정책 변경 등의 메타데이터를 포함.
 // - 난이도(difficulty)가 설정되어 있다면 PoW 형태로 블록 해시 봉인 가능.
 ////////////////////////////////////////////////////////////////////////////////
 
 type UpperBlock struct {
-	Index     int           `json:"index"`      // 블록 번호
-	PrevHash  string        `json:"prev_hash"`  // 이전 블록의 해시
-	Timestamp string        `json:"timestamp"`  // 블록 생성 시간
-	Records   []UpperRecord `json:"records"`    // 포함된 UpperRecord 리스트
-	Nonce     int           `json:"nonce"`      // PoW 난수
-	BlockHash string        `json:"block_hash"` // 블록 전체의 해시
+	Index      int            `json:"index"`       // 블록 번호
+	OttID      string         `json:"ott_id"`      // OTT 체인 식별자
+	PrevHash   string         `json:"prev_hash"`   // 이전 블록의 해시
+	Timestamp  string         `json:"timestamp"`   // 생성 시간 (RFC3339 형식)
+	Records    []AnchorRecord `json:"records"`     // CP 체인에서 제출한 AnchorRecord 목록
+	MerkleRoot string         `json:"merkle_root"` // AnchorRecords 속 MerkleRoot들을 병합하여 계산한 상위 MerkleRoot
+	Nonce      int            `json:"nonce"`       // PoW용 Nonce
+	Difficulty int            `json:"difficulty"`  // 난이도
+	BlockHash  string         `json:"block_hash"`  // 블록 전체 해시
 }

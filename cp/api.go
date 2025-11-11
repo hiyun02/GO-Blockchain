@@ -27,7 +27,7 @@ func RegisterAPI(mux *http.ServeMux, chain *LowerChain) {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		root := chain.LatestRoot() // storage의 getLatestRoot 사용
+		root := getLatestRoot() // storage의 getLatestRoot 사용
 		writeJSON(w, http.StatusOK, map[string]string{"root": root})
 	})
 
@@ -169,15 +169,21 @@ func RegisterAPI(mux *http.ServeMux, chain *LowerChain) {
 	// 최초 채굴 요청을 받아 모든 노드에 채굴을 시작시키는 트리거
 	// GET /mine
 	mux.HandleFunc("/mine", func(w http.ResponseWriter, r *http.Request) {
-		log.Printf("[API][MINE] Mining trigger received")
+		var rec ContentRecord
+		if err := json.NewDecoder(r.Body).Decode(&rec); err != nil {
+			http.Error(w, "invalid content record", http.StatusBadRequest)
+			return
+		}
+		defer r.Body.Close()
 
-		// 핵심 로직은 별도 함수로 위임
-		go triggerNetworkMining()
+		log.Printf("[API][MINE] Mining trigger received with content: %s", rec.ContentID)
 
-		// 요청 즉시 응답 반환
+		go triggerNetworkMining([]ContentRecord{rec}) // 데이터 전달
+
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{
-			"status": "mining triggered",
+			"status":     "mining triggered",
+			"content_id": rec.ContentID,
 		})
 	})
 }

@@ -1,216 +1,113 @@
-// ott/api.go
+// api.go
 package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
-	"os"
-	"strings"
+	"strconv"
+	"time"
 )
 
-var (
-	keyAPIEnabled = strings.ToLower(os.Getenv("OTT_KEY_API_ENABLED")) == "true"
-	keyAPIToken   = os.Getenv("OTT_KEY_API_TOKEN")
-)
-
+// JSON 헬퍼
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-func RegisterUpperAPI(mux *http.ServeMux) {
-	// (DEV 전용) HMAC 키 등록
-	mux.HandleFunc("/upper/anchor/key", func(w http.ResponseWriter, r *http.Request) {
-		if !keyAPIEnabled {
-			http.Error(w, "key api disabled", http.StatusForbidden)
-			return
-		}
-		if keyAPIToken != "" && r.Header.Get("X-Admin-Token") != keyAPIToken {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		if r.Method != http.MethodPost {
+// main.go에서 mux와 UpperChain을 넘겨받아 API 핸들 등록
+func RegisterAPI(mux *http.ServeMux, chain *UpperChain) {
+
+	// 블록 조회: 인덱스
+	// GET /block/index?id=<int>
+	mux.HandleFunc("/block/index", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		var in struct {
-			CPID   string `json:"cp_id"`
-			Secret string `json:"secret"`
-		}
-		if json.NewDecoder(r.Body).Decode(&in) != nil || in.CPID == "" || in.Secret == "" {
-			http.Error(w, "invalid body", http.StatusBadRequest)
+		q := r.URL.Query().Get("id")
+		if q == "" {
+			http.Error(w, "id parameter required", http.StatusBadRequest)
 			return
 		}
-		if err := setHMACKey(in.CPID, in.Secret); err != nil {
-			http.Error(w, "save key error", http.StatusInternalServerError)
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
-	})
-
-	// 계약 등록/갱신
-	mux.HandleFunc("/upper/contract/register", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		var c ContractData
-		if json.NewDecoder(r.Body).Decode(&c) != nil || c.CPID == "" || c.ExpiryTimestamp == "" {
-			http.Error(w, "invalid body", http.StatusBadRequest)
-			return
-		}
-		if err := setContract(c.CPID, c); err != nil {
-			http.Error(w, "save contract error", http.StatusInternalServerError)
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
-	})
-
-	// 앵커 수신(서명+ts 검증)
-	mux.HandleFunc("/upper/anchor/receive", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		var in struct {
-			CPID      string `json:"cp_id"`
-			LowerRoot string `json:"lower_root"`
-			Timestamp string `json:"ts"`
-			Signature string `json:"sig"`
-		}
-		if json.NewDecoder(r.Body).Decode(&in) != nil ||
-			in.CPID == "" || in.LowerRoot == "" || in.Timestamp == "" || in.Signature == "" {
-			http.Error(w, "invalid body", http.StatusBadRequest)
-			return
-		}
-		if err := verifyAndStoreAnchor(in.CPID, in.LowerRoot, in.Timestamp, in.Signature); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
-	})
-
-	// UpperBlock 확정 (요청에 cp_ids 지정)
-	// POST /upper/block/finalize { "cp_ids": ["CP-A","CP-B"] }
-	mux.HandleFunc("/upper/block/finalize", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		var in struct {
-			CPIDs []string `json:"cp_ids"`
-		}
-		if json.NewDecoder(r.Body).Decode(&in) != nil || len(in.CPIDs) == 0 {
-			http.Error(w, "invalid body", http.StatusBadRequest)
-			return
-		}
-
-		// 마지막 블록 or 제네시스
-		var last UpperBlock
-		if h, ok := getHeightLatest(); ok {
-			b, err := getBlockByIndex(h)
-			if err != nil {
-				http.Error(w, "load last block error", http.StatusInternalServerError)
-				return
-			}
-			last = b
-		} else {
-			gen := createGenesisBlock()
-			if err := saveBlock(gen); err != nil {
-				http.Error(w, "save genesis error", http.StatusInternalServerError)
-				return
-			}
-			_ = setHeightLatest(0)
-			last = gen
-		}
-
-		// 대상 CP들의 계약+앵커로 UpperRecord 구성
-		records := make([]UpperRecord, 0, len(in.CPIDs))
-		for _, cp := range in.CPIDs {
-			contract, okC := getContract(cp)
-			anchor, okA := getAnchor(cp)
-			if !(okC && okA) {
-				continue
-			}
-			rec := UpperRecord{
-				CPID:             cp,
-				ContractSnapshot: contract,
-				LowerRoot:        anchor.LowerRoot,
-				AccessCatalog:    contract.AllowedContentIDs,
-				AnchorTimestamp:  anchor.Timestamp,
-			}
-			records = append(records, rec)
-		}
-
-		nb := newUpperBlock(last, records)
-		if err := saveBlock(nb); err != nil {
-			http.Error(w, "save block error", http.StatusInternalServerError)
-			return
-		}
-		_ = setHeightLatest(nb.Index)
-
-		writeJSON(w, http.StatusOK, map[string]any{
-			"ok":     true,
-			"count":  len(records),
-			"block":  nb,
-			"height": nb.Index,
-		})
-	})
-
-	// 블록 조회
-	mux.HandleFunc("/upper/block/index", func(w http.ResponseWriter, r *http.Request) {
-		id := r.URL.Query().Get("id")
-		if id == "" {
-			http.Error(w, "id required", http.StatusBadRequest)
-			return
-		}
-		n := atoiSafe(id)
-		blk, err := getBlockByIndex(n)
+		idx, err := strconv.Atoi(q)
 		if err != nil {
-			http.Error(w, "not found", http.StatusNotFound)
+			http.Error(w, "id must be integer", http.StatusBadRequest)
+			return
+		}
+		blk, err := getBlockByIndex(idx)
+		if err != nil {
+			http.Error(w, "block not found", http.StatusNotFound)
 			return
 		}
 		writeJSON(w, http.StatusOK, blk)
 	})
 
-	// (선택) 최신 앵커/계약 조회(간단)
-	mux.HandleFunc("/upper/anchor/get", func(w http.ResponseWriter, r *http.Request) {
-		cp := r.URL.Query().Get("cp_id")
-		if cp == "" {
-			http.Error(w, "cp_id required", http.StatusBadRequest)
+	// 블록 조회: 해시
+	// GET /block/hash?value=<hash>
+	mux.HandleFunc("/block/hash", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		a, ok := getAnchor(cp)
-		if !ok {
-			http.Error(w, "no anchor", http.StatusNotFound)
+		hash := r.URL.Query().Get("value")
+		if hash == "" {
+			http.Error(w, "value parameter required", http.StatusBadRequest)
 			return
 		}
-		writeJSON(w, http.StatusOK, a)
+		blk, err := getBlockByHash(hash)
+		if err != nil {
+			http.Error(w, "block not found", http.StatusNotFound)
+			return
+		}
+		writeJSON(w, http.StatusOK, blk)
 	})
-	mux.HandleFunc("/upper/contract/get", func(w http.ResponseWriter, r *http.Request) {
-		cp := r.URL.Query().Get("cp_id")
-		if cp == "" {
-			http.Error(w, "cp_id required", http.StatusBadRequest)
-			return
-		}
-		c, ok := getContract(cp)
-		if !ok {
-			http.Error(w, "no contract", http.StatusNotFound)
-			return
-		}
-		writeJSON(w, http.StatusOK, c)
-	})
-}
 
-func atoiSafe(s string) int {
-	n := 0
-	for i := range s {
-		c := s[i]
-		if c < '0' || c > '9' {
-			return n
+	// 전체 장부 조회 (페이지네이션)
+	// GET /blocks?offset=<int>&limit=<int>
+	mux.HandleFunc("/blocks", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
 		}
-		n = n*10 + int(c-'0')
-	}
-	return n
+		offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+		if limit <= 0 {
+			limit = 50
+		}
+		blocks, total, err := listBlocksPaginated(offset, limit)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("list blocks error: %v", err), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"total":  total,
+			"offset": offset,
+			"limit":  limit,
+			"items":  blocks,
+		})
+	})
+
+	// 노드 상태 확인
+	// GET /status : 헬스/높이/주소 리턴 (부트노드 선정에 사용)
+	mux.HandleFunc("/status", func(w http.ResponseWriter, r *http.Request) {
+		h, _ := getLatestHeight()
+		writeJSON(w, http.StatusOK, map[string]any{
+			"addr":       self,
+			"height":     h,
+			"is_boot":    isBoot.Load(),
+			"bootAddr":   boot,
+			"started_at": startedAt.Format(time.RFC3339),
+			"peers":      peersSnapshot(),
+		})
+	})
+
+	// 현재 노드가 알고 있는 피어 리스트 반환
+	// GET /peers
+	mux.HandleFunc("/peers", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(peersSnapshot()) // 비어있어도 "[]" 반환
+	})
+
 }

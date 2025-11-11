@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"log"
-	"math/rand"
 	"net/http"
 	"strings"
 	"sync/atomic"
@@ -58,10 +57,16 @@ func validHash(hash string, difficulty int) bool {
 }
 
 // 네트워크 전체 노드에게 채굴 요청 전달
-func triggerNetworkMining() {
+func triggerNetworkMining(entries []ContentRecord) {
+	reqBody, _ := json.Marshal(map[string]any{
+		"entries": entries,
+	})
+
+	// 노드 주소 목록을 순회하며 채굴 요청 전달
 	for _, peer := range peersSnapshot() {
 		go func(addr string) {
-			http.Post("http://"+addr+"/mine/start", "application/json", nil)
+			http.Post("http://"+addr+"/mine/start", "application/json", strings.NewReader(string(reqBody)))
+			log.Printf("[POW][NETWORK] Broadcasted mining start to %s", addr)
 		}(peer)
 	}
 	log.Printf("[PoW][NETWORK] Broadcasted mining start to all peers")
@@ -124,7 +129,7 @@ func mineBlock(difficulty int) MineResult {
 	log.Printf("[PoW] Starting mining (index=%d prev=%s...)", index, prevHash[:8])
 
 	// Nonce 탐색
-	nonce := rand.Intn(10000)
+	nonce := 0
 	var hash string
 
 	for !miningStop.Load() {

@@ -17,8 +17,9 @@ func main() {
 	addr := getEnvDefault("PORT", "5000")
 	addr = ":" + addr
 
-	boot = getEnvDefault("BOOTSTRAP_ADDR", "cp-boot:5000") // 부트노드 고정주소
-	self = getEnvDefault("NODE_ADDR", "cp-node-00:5000")   // 이 노드의 외부접속 주소
+	boot = getEnvDefault("BOOTSTRAP_ADDR", "cp-boot:5000")         // CP체인 부트노드 주소
+	self = getEnvDefault("NODE_ADDR", "cp-node-00:5000")           // 이 노드의 외부접속 주소
+	ottBoot = getEnvDefault("OTT_BOOTSTRAP_ADDR", "ott-boot:5000") // OTT체인 부트노드 주소
 
 	// 2) DB 초기화
 	initDB(dbPath)
@@ -36,17 +37,24 @@ func main() {
 	mux := http.NewServeMux()
 	// 사용자와 상호작용을 위한 API 등록
 	RegisterAPI(mux, chain)
-	// P2P 엔드포인트 등록
+	// 노드 간 통신 엔드포인트 등록
 	//     - /addPeer : 기존 노드들이 신규 노드를 추가
+	//	   - /mine/start : 노드 간 채굴 요청 전파
 	//     - /receive : 다른 노드가 보낸 확정 블록 수신
 	//	   - /register : 부트노드 연결 및 네트워크 연결
 	//	   - /bootNotify : 부트노드 변경 수신
+	//	   - /getPublicKey : 공개키 반환
 	mux.HandleFunc("/addPeer", addPeer)
+	mux.HandleFunc("/mine/start", handleMineStart)
 	mux.HandleFunc("/receive", receive)
 	mux.HandleFunc("/register", registerPeer)
 	mux.HandleFunc("/bootNotify", bootNotify)
+	mux.HandleFunc("/getPublicKey", getPublicKey)
 
-	// 5) 서버 시작 (고루틴으로 실행해 메인 Go 루틴이 계속 진행되도록)
+	// 5) 앵커 서명을 위한 key pair 생성
+	ensureKeyPair()
+
+	// 6) 서버 시작 (고루틴으로 실행해 메인 Go 루틴이 계속 진행되도록)
 	go func() {
 		log.Println("[START] NODE Running on", addr)
 		if err := http.ListenAndServe(addr, mux); err != nil {
@@ -54,7 +62,7 @@ func main() {
 		}
 	}()
 
-	// 6) 자동 부트스트랩
+	// 7) 자동 부트스트랩
 	//  부트노드가 아니라면 부트노드에 자신의 주소를 등록 -> 부트노드로부터 노드 주소 목록 받아 등록 -> 체인 동기화
 	if boot != "" && self != "" && boot != self {
 		go func() {
@@ -98,7 +106,7 @@ func main() {
 		isBoot.Store(true)
 	}
 
-	// 7) 네트워크 감시 루틴 실행
+	// 8) 네트워크 감시 루틴 실행
 	// 네트워크 내 모든 노드를 주기적으로 검사하고,
 	// 응답이 없는 노드를 제거하며, 만약 부트노드가 죽은 경우 새로 선출하는 감시 루프
 	go func() {
@@ -106,7 +114,7 @@ func main() {
 		startNetworkWatcher()
 	}()
 
-	// 8) 메인 Go 루틴 유지
+	// 9) 메인 Go 루틴 유지
 	select {}
 }
 

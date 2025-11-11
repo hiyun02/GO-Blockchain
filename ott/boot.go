@@ -39,7 +39,7 @@ func registerPeer(w http.ResponseWriter, r *http.Request) {
 
 	// 체인 정체성 확인: 제네시스 cp_id와 일치해야 가입 허용
 	blk0, err := getBlockByIndex(0)
-	if err != nil || blk0.CpID != req.CpID {
+	if err != nil || blk0.OttID != req.CpID {
 		http.Error(w, "cp_id mismatch", http.StatusForbidden)
 		return
 	}
@@ -90,6 +90,10 @@ func registerPeer(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(registerResp{Peers: out})
 }
 
+// ============================================
+// 부트노드 상태 관리 소스
+// ============================================
+
 // 전역 상태 관리 변수
 var (
 	self       string       // 현재 노드 주소 NODE_ADDR (예: "cp-node-01:5000")
@@ -97,12 +101,7 @@ var (
 	startedAt  = time.Now() // 현재 노드 시작 시간
 	isBoot     atomic.Bool  // 현재 노드가 부트노드인지 여부
 	bootAddrMu sync.RWMutex // 부트노드 주소 접근 시 동시성 보호용 RW 잠금 객체
-	ottBoot    string       // ott 체인의 부트노드 주소 (예 : "ott-node-01:5000")
 )
-
-// ============================================
-// 부트노드 상태 관리 소스
-// ============================================
 
 // 노드 상태 구조체, /status API 호출 시 응답받는 JSON 구조
 type nodeStatus struct {

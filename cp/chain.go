@@ -115,19 +115,10 @@ func onBlockReceived(lb LowerBlock) error {
 		return fmt.Errorf("set height: %w", err)
 	}
 
+	// 서명하여 OTT 체인으로 제출
+	submitAnchor(lb)
 	logInfo("[CHAIN] Accepted New Block #%d (%s)", lb.Index, lb.BlockHash[:12])
 	return nil
-}
-
-// 최신 루트 조회
-func (ch *LowerChain) LatestRoot() string {
-	return getLatestRoot()
-}
-
-// 체인 상태 출력
-func (ch *LowerChain) chainInfo() string {
-	height, _ := getLatestHeight()
-	return fmt.Sprintf("CP=%s | Height=%d | Difficulty=%d", ch.cpID, height, ch.difficulty)
 }
 
 // 간단 로그 출력 함수

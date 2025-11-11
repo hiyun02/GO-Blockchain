@@ -7,7 +7,7 @@ package main
 // - ContentRecord  : 콘텐츠 단위 메타데이터
 // - LowerBlock     : CP 체인의 블록 구조 (Merkle Root 포함)
 // - ContractData   : CP-OTT 간 계약 정보
-// - UpperRecord    : OTT 체인에 저장되는 앵커 및 계약 스냅샷
+// - AnchorRecord    : OTT 체인에 저장되는 앵커 및 계약 스냅샷
 ////////////////////////////////////////////////////////////////////////////////
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -31,7 +31,7 @@ type ContentRecord struct {
 // 2. LowerBlock (CP 체인 블록 구조)
 // ------------------------------------------------------------
 // CP(Content Provider) 체인에서 생성되는 블록 단위 구조체.
-// 하나의 블록은 여러 ContentRecord(Entries)를 포함하고,
+// 하나의 블록은 여러 ContentRecord를 포함하고,
 // 그 해시들을 기반으로 Merkle Root를 계산하여 블록 헤더에 저장.
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -42,6 +42,8 @@ type LowerBlock struct {
 	Timestamp  string          `json:"timestamp"`   // 생성 시간 (RFC3339 형식)
 	Entries    []ContentRecord `json:"entries"`     // 블록 내 콘텐츠 목록
 	MerkleRoot string          `json:"merkle_root"` // Entries의 해시 기반 머클루트
+	Nonce      int             `json:"nonce"`       // PoW 성공 시점의 Nonce
+	Difficulty int             `json:"difficulty"`  // 난이도 (ex: 4 => "0000"으로 시작)
 	BlockHash  string          `json:"block_hash"`  // 블록 전체 해시 (헤더 기준)
 }
 
@@ -64,7 +66,7 @@ type ContractData struct {
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-// 4. UpperRecord (OTT 체인의 단일 앵커 레코드)
+// 4. AnchorRecord (OTT 체인의 단일 앵커 레코드)
 // ------------------------------------------------------------
 // OTT 체인에서 하나의 CP에 대해 생성되는 앵커 및 계약 스냅샷 정보.
 // - CPID: 콘텐츠 제공자 ID
@@ -74,7 +76,7 @@ type ContractData struct {
 // - AnchorTimestamp: 앵커가 제출된 시각
 ////////////////////////////////////////////////////////////////////////////////
 
-type UpperRecord struct {
+type AnchorRecord struct {
 	CPID             string       `json:"cp_id"`             // 콘텐츠 제공자 ID
 	ContractSnapshot ContractData `json:"contract_snapshot"` // 계약 상태 스냅샷
 	LowerRoot        string       `json:"lower_root"`        // CP 체인에서 전달된 머클 루트 (서명 포함)

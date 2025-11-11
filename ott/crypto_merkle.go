@@ -88,7 +88,7 @@ func hashContentRecord(rec ContentRecord) string {
 	return sha256Hex(canonical)
 }
 
-// merkleProof : 주어진 leaf들의 해시 배열과 타깃 인덱스로부터
+// MerkleProof : 주어진 leaf들의 해시 배열과 타깃 인덱스로부터
 // 형제 노드(sibling)의 해시 및 위치(L/R)를 담은 증명(proof)을 생성한다.
 // 결과는 [(siblingHex, "L" or "R")] 형태로 반환.
 func merkleProof(leafHashes []string, idx int) [][2]string {
@@ -127,4 +127,16 @@ func merkleProof(leafHashes []string, idx int) [][2]string {
 		nodes = nextLevel
 	}
 	return proof
+}
+
+// 여러 CP 레코드 속 Merkle Root를 병합하여 상위 MerkleRoot 계산
+func computeUpperMerkleRoot(records []AnchorRecord) string {
+	if len(records) == 0 {
+		return ""
+	}
+	leaf := make([]string, len(records))
+	for i, rec := range records {
+		leaf[i] = rec.LowerRoot // CP 체인 루트 기반으로 상위 루트 계산
+	}
+	return merkleRootHex(leaf)
 }
