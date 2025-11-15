@@ -253,24 +253,24 @@ func chgOttBoot(w http.ResponseWriter, r *http.Request) {
 	}
 	// 응답 파싱할 구조체
 	var in struct {
-		ottAddr string `json:"addr"`
+		OttAddr string `json:"addr"`
 	}
 	// 요청 본문이 유효한 JSON이 아니거나 addr 필드가 비어 있다면 잘못된 요청으로 간주
-	if json.NewDecoder(r.Body).Decode(&in) != nil || in.ottAddr == "" {
+	if json.NewDecoder(r.Body).Decode(&in) != nil || in.OttAddr == "" {
 		http.Error(w, "bad body", 400)
 		return
 	}
 	// 전달받은 부트노드 주소가 실제로 살아있는지 검증
-	if _, ok := probeStatus(in.ottAddr); !ok {
+	if _, ok := probeStatus(in.OttAddr); !ok {
 		http.Error(w, "boot not reachable", 502)
-		log.Printf("[BOOT] received new OTT Boot addr (%s) but not reachable", in.ottAddr)
+		log.Printf("[BOOT] received new OTT Boot addr (%s) but not reachable", in.OttAddr)
 		return
 	}
 
 	// 전역변수에 반영 및 전파
-	setOttBoot(in.ottAddr)
-	log.Printf("[BOOT] this node (%s) is new OTT bootnode now", in.ottAddr)
-	broadcastNewOTTBoot(in.ottAddr)
+	setOttBoot(in.OttAddr)
+	log.Printf("[BOOT] this node (%s) is new OTT bootnode now", in.OttAddr)
+	broadcastNewOTTBoot(in.OttAddr)
 	w.WriteHeader(200)
 }
 

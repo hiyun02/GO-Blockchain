@@ -100,6 +100,7 @@ func RegisterAPI(mux *http.ServeMux, chain *UpperChain) {
 			"bootAddr":   boot,
 			"started_at": startedAt.Format(time.RFC3339),
 			"peers":      peersSnapshot(),
+			"ott_boot":   cpBootMap,
 		})
 	})
 

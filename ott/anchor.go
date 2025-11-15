@@ -17,11 +17,11 @@ import (
 // OTT에서 CP가 제출한 앵커를 수신하고 검증한 후 pending 추가함수 호출(부트노드만 수행)
 func addAnchor(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		cpID   string `json:"cp_id"`
-		cpBoot string `json:"cp_boot"`
-		root   string `json:"root"`
-		ts     int64  `json:"ts"`
-		sig    string `json:"sig"`
+		CpID   string `json:"cp_id"`
+		CpBoot string `json:"cp_boot"`
+		Root   string `json:"root"`
+		Ts     int64  `json:"ts"`
+		Sig    string `json:"sig"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid JSON", 400)
@@ -30,7 +30,7 @@ func addAnchor(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
 	// CP의 공개키 가져오기
-	resp, err := http.Get("http://" + req.cpBoot + "/getPublicKey")
+	resp, err := http.Get("http://" + req.CpBoot + "/getPublicKey")
 	if err != nil {
 		http.Error(w, "failed to fetch public key", 500)
 		return
@@ -51,13 +51,13 @@ func addAnchor(w http.ResponseWriter, r *http.Request) {
 
 	// 서명 검증 과정 시작(ECDSA.Verify)
 	// CP가 서명한 원문 메시지 구성
-	msg := []byte(fmt.Sprintf("%s|%d", req.root, req.ts))
+	msg := []byte(fmt.Sprintf("%s|%d", req.Root, req.Ts))
 
 	// 메시지를 SHA-256으로 해시 (서명은 해시값에 대해 수행됨)
 	hash := sha256.Sum256(msg)
 
 	// CP로부터 전달받은 서명(hex 문자열)을 바이트 배열로 디코딩
-	sigBytes, _ := hex.DecodeString(req.sig)
+	sigBytes, _ := hex.DecodeString(req.Sig)
 
 	// ECDSA 서명은 (r, s) 두 부분으로 나뉘므로 반으로 분할
 	half := len(sigBytes) / 2
@@ -74,16 +74,16 @@ func addAnchor(w http.ResponseWriter, r *http.Request) {
 
 	if !valid {
 		http.Error(w, "invalid signature", 403)
-		log.Printf("[ANCHOR][INVALID] rejected from %s", req.cpID)
+		log.Printf("[ANCHOR][INVALID] rejected from %s", req.CpID)
 		return
 	}
 
 	// 앵커 저장
-	log.Printf("[ANCHOR] Verified & adding anchor from CP Chain ... %s : %s)", req.cpID, req.root)
-	ch.appendAnchorToPending(req.cpID, req.root)
+	log.Printf("[ANCHOR] Verified & adding anchor from CP Chain ... %s : %s)", req.CpID, req.Root)
+	ch.appendAnchorToPending(req.CpID, req.Root)
 
 	// 송신한 CP체인의 CPID와 부트노드 주소를 저장한 후 다른 ott 노드에 전파함
-	log.Printf("[ANCHOR] Call broadcastNewCpBoot() for store %s : %s to CpBootMap ... )", req.cpID, req.cpBoot)
-	broadcastNewCpBoot(req.cpID, req.cpBoot)
+	log.Printf("[ANCHOR] Call broadcastNewCpBoot() for store %s : %s to CpBootMap ... )", req.CpID, req.CpBoot)
+	broadcastNewCpBoot(req.CpID, req.CpBoot)
 	w.WriteHeader(http.StatusOK)
 }

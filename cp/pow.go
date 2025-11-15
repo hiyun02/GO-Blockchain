@@ -74,10 +74,18 @@ func triggerNetworkMining(entries []ContentRecord) {
 
 // 각 노드에서 채굴 요청 수신 및 채굴 수행
 func handleMineStart(w http.ResponseWriter, r *http.Request) {
-	log.Printf("[PoW][NODE] Received mining start signal")
+	var req struct {
+		Entries []ContentRecord `json:"entries"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+	defer r.Body.Close()
 
+	log.Printf("[PoW][NODE] Received mining start signal")
 	go func() {
-		result := mineBlock(GlobalDifficulty)
+		result := mineBlock(GlobalDifficulty, req.Entries)
 		if result.BlockHash == "" {
 			log.Printf("[PoW][NODE] Mining aborted")
 			return
@@ -92,7 +100,7 @@ func handleMineStart(w http.ResponseWriter, r *http.Request) {
 
 // PoW 채굴 수행
 // 항상 현재 로컬 체인 상태 기반으로 시작
-func mineBlock(difficulty int) MineResult {
+func mineBlock(difficulty int, entries []ContentRecord) MineResult {
 	miningStop.Store(false)
 
 	// LevelDB 장부에서 현재 마지막 블록 조회
@@ -111,7 +119,6 @@ func mineBlock(difficulty int) MineResult {
 	index := prev.Index + 1
 	prevHash := prev.BlockHash
 
-	entries := []ContentRecord{}
 	leaf := make([]string, len(entries))
 	for i, r := range entries {
 		leaf[i] = hashContentRecord(r)
@@ -153,12 +160,10 @@ func broadcastBlock(res MineResult, entries any) {
 	})
 	for _, peer := range peersSnapshot() {
 		go func(addr string) {
-			if addr == self {
-				return
-			}
 			http.Post("http://"+addr+"/receive", "application/json", strings.NewReader(string(body)))
 		}(peer)
 	}
+	http.Post("http://"+self+"/receive", "application/json", strings.NewReader(string(body)))
 	log.Printf("[PoW][P2P][BROADCAST] Winner sent NewBlock to peers: index=%d hash=%s", res.Header.Index, res.BlockHash)
 }
 

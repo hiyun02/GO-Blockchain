@@ -87,7 +87,7 @@ func submitAnchor(block LowerBlock) {
 
 	body, _ := json.Marshal(req)
 	ottURL := "http://" + ottBoot + "/addAnchor"
-
+	log.Printf("[ANCHOR] Anchor Sent to OTT BOOT : %s", ottBoot)
 	resp, err := http.Post(ottURL, "application/json", bytes.NewReader(body))
 	if err != nil {
 		log.Printf("[ANCHOR][ERROR] failed to submit anchor: %v", err)

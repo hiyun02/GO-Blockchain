@@ -30,7 +30,7 @@ func main() {
 	if err != nil {
 		log.Fatal("[START] chain init error: ", err)
 	}
-	log.Printf("[START] UpperChain ready (cp_id=%s)\n", ottID)
+	log.Printf("[START] UpperChain ready (ott_id=%s)\n", ottID)
 
 	// 4) HTTP 라우팅 등록
 	mux := http.NewServeMux()

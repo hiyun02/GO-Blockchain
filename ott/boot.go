@@ -292,24 +292,24 @@ func cpBootNotify(w http.ResponseWriter, r *http.Request) {
 	}
 	// 응답 파싱할 구조체
 	var in struct {
-		cpID   string `json:"cp_id"`
-		cpBoot string `json:"cp_boot"`
+		CpID   string `json:"cp_id"`
+		CpBoot string `json:"cp_boot"`
 	}
 	// 요청 본문이 유효한 JSON이 아니거나 주소 필드가 비어 있다면 잘못된 요청으로 간주
-	if json.NewDecoder(r.Body).Decode(&in) != nil || in.cpBoot == "" {
+	if json.NewDecoder(r.Body).Decode(&in) != nil || in.CpBoot == "" {
 		http.Error(w, "bad body", 400)
 		return
 	}
 	// 전달받은 부트노드 주소가 실제로 살아있는지 검증
-	if _, ok := probeStatus(in.cpBoot); !ok {
+	if _, ok := probeStatus(in.CpBoot); !ok {
 		http.Error(w, "boot not reachable", 502)
-		log.Printf("[BOOT] received new boot addr (%s) but not reachable", in.cpBoot)
+		log.Printf("[BOOT] received new boot addr (%s) but not reachable", in.CpBoot)
 		return
 	}
 	// CP 체인의 ID와 부트노드 주소 저장
-	setCpBootAddr(in.cpID, in.cpBoot)
+	setCpBootAddr(in.CpID, in.CpBoot)
 	// 성공 로그 출력
-	log.Printf("[BOOT] Successfully received cpBoot: %s : %s to CpBootMap )", in.cpID, in.cpBoot)
+	log.Printf("[BOOT] Successfully received cpBoot: %s : %s to CpBootMap )", in.CpID, in.CpBoot)
 	w.WriteHeader(200)
 }
 

@@ -70,6 +70,7 @@ func triggerNetworkMining(anchors []AnchorRecord) {
 			log.Printf("[POW][NETWORK] Broadcasted mining start to %s", addr)
 		}(peer)
 	}
+	http.Post("http://"+self+"/mine/start", "application/json", strings.NewReader(string(reqBody)))
 	log.Printf("[POW][NETWORK] Broadcasted mining start with %d entries", len(anchors))
 }
 
@@ -160,12 +161,10 @@ func broadcastBlock(res MineResult, anchors []AnchorRecord) {
 	})
 	for _, peer := range peersSnapshot() {
 		go func(addr string) {
-			if addr == self {
-				return
-			}
 			http.Post("http://"+addr+"/receive", "application/json", strings.NewReader(string(body)))
 		}(peer)
 	}
+	http.Post("http://"+self+"/receive", "application/json", strings.NewReader(string(body)))
 	log.Printf("[PoW][P2P][BROADCAST] Winner sent NewBlock to peers: index=%d hash=%s", res.Header.Index, res.BlockHash)
 }
 
