@@ -55,6 +55,8 @@ func main() {
 	mux.HandleFunc("/chgOttBoot", chgOttBoot)
 	mux.HandleFunc("/ottBootNotify", ottBootNotify)
 
+	mux.Handle("/", http.FileServer(http.Dir("./static")))
+
 	// 5) 앵커 서명을 위한 key pair 생성
 	ensureKeyPair()
 

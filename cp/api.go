@@ -168,7 +168,6 @@ func RegisterAPI(mux *http.ServeMux, chain *LowerChain) {
 	})
 
 	// 최초 채굴 요청을 받아 모든 노드에 채굴을 시작시키는 트리거
-	// GET /mine
 	mux.HandleFunc("/mine", func(w http.ResponseWriter, r *http.Request) {
 		var rec ContentRecord
 		if err := json.NewDecoder(r.Body).Decode(&rec); err != nil {

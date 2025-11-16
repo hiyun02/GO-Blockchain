@@ -12,6 +12,7 @@ import (
 	"log"
 	"math/big"
 	"net/http"
+	"time"
 )
 
 // OTT에서 CP가 제출한 앵커를 수신하고 검증한 후 pending 추가함수 호출(부트노드만 수행)
@@ -80,7 +81,19 @@ func addAnchor(w http.ResponseWriter, r *http.Request) {
 
 	// 앵커 저장
 	log.Printf("[ANCHOR] Verified & adding anchor from CP Chain ... %s : %s)", req.CpID, req.Root)
-	ch.appendAnchorToPending(req.CpID, req.Root)
+	// AnchorRecord 구성 (계약 정보는 현재 비워둠)
+	ar := AnchorRecord{
+		CPID:             req.CpID,
+		ContractSnapshot: ContractData{}, // 빈 계약 정보
+		LowerRoot:        req.Root,
+		AccessCatalog:    []string{}, // 비어있는 접근 리스트
+		AnchorTimestamp:  time.Unix(req.Ts, 0).Format(time.RFC3339),
+	}
+
+	// pendingAnchors 에 anchor 객체 전체 추가
+	ch.appendAnchorToPending(ar)
+
+	log.Printf("[ANCHOR] Pending anchor added: %+v", ar)
 
 	// 송신한 CP체인의 CPID와 부트노드 주소를 저장한 후 다른 ott 노드에 전파함
 	log.Printf("[ANCHOR] Call broadcastNewCpBoot() for store %s : %s to CpBootMap ... )", req.CpID, req.CpBoot)

@@ -52,6 +52,8 @@ func main() {
 	mux.HandleFunc("/addAnchor", addAnchor)
 	mux.HandleFunc("/cpBootNotify", cpBootNotify)
 
+	mux.Handle("/", http.FileServer(http.Dir("./static")))
+
 	// 5) 서버 시작
 	go func() {
 		log.Println("[START] NODE Running on", addr)
@@ -64,7 +66,7 @@ func main() {
 	//  부트노드가 아니라면 부트노드에 자신의 주소를 등록 -> 부트노드로부터 노드 주소 목록 받아 등록 -> 체인 동기화
 	if boot != "" && self != "" && boot != self {
 		go func() {
-			payload := map[string]string{"addr": self, "cp_id": ottID}
+			payload := map[string]string{"addr": self, "ott_id": ottID}
 			b, _ := json.Marshal(payload)
 
 			resp, err := http.Post("http://"+boot+"/register", "application/json", strings.NewReader(string(b)))

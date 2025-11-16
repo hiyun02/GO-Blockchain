@@ -95,6 +95,7 @@ func handleMineStart(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		log.Printf("[POW][NODE] ✅ Mined block hash=%s", result.BlockHash[:12])
+		ch.lastBlockTime = time.Now()
 		broadcastBlock(result, req.Anchors)
 	}()
 

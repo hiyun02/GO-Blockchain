@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>OTT Chain - Block List</title>
+    <style>
+        body { font-family: Arial; margin: 20px; }
+        .block { border:1px solid #ddd; padding:10px; margin:10px 0; }
+        .title { font-weight: bold; }
+    </style>
+</head>
+<body>
+
+<h1>OTT 체인 블록 목록</h1>
+
+<div id="status"></div>
+
+<hr>
+
+<h2>블록 리스트</h2>
+<div id="blocks"></div>
+
+<script>
+    // -----------------------
+    // 노드 상태 조회
+    // -----------------------
+    fetch('/status')
+        .then(r => r.json())
+        .then(s => {
+            document.getElementById('status').innerHTML = `
+      <h3>노드 상태</h3>
+      <p>주소: ${s.addr}</p>
+      <p>높이: ${s.height}</p>
+      <p>부트노드 여부: ${s.is_boot}</p>
+      <p>시작 시간: ${s.started_at}</p>
+      <p>Peers: ${s.peers.join(', ')}</p>
+    `;
+        });
+
+    // -----------------------
+    // OTT 블록 리스트
+    // -----------------------
+    fetch('/blocks?offset=0&limit=100')
+        .then(r => r.json())
+        .then(d => {
+            const html = d.items.map(b => `
+      <div class="block">
+        <div class="title">
+          <a href="/detail.html?id=${b.Index}">
+            OTT Block #${b.Index}
+          </a>
+        </div>
+        <p><b>Timestamp:</b> ${b.Timestamp}</p>
+        <p><b>Records:</b> ${b.Records ? b.Records.length : 0} 개</p>
+        <p><b>Hash:</b> ${b.BlockHash.slice(0,16)}...</p>
+      </div>
+    `).join('');
+            document.getElementById('blocks').innerHTML = html;
+        });
+</script>
+
+</body>
+</html>

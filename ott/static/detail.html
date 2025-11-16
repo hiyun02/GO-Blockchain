@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>OTT Block Detail</title>
+    <style>
+        body { font-family: Arial; margin: 20px; }
+        pre { background:#f6f6f6; padding:10px; white-space: pre-wrap; }
+        .record { border:1px solid #ccc; padding:10px; margin:10px 0; }
+    </style>
+</head>
+<body>
+
+<h1>OTT 블록 상세보기</h1>
+
+<div id="meta"></div>
+
+<h2>Anchor Records</h2>
+<div id="records"></div>
+
+<script>
+    // URL 파라미터에서 id 얻기
+    const params = new URLSearchParams(window.location.search);
+    const id = params.get("id");
+
+    // API 호출
+    fetch(`/block/index?id=${id}`)
+        .then(r => r.json())
+        .then(b => {
+
+            // 블록 메타데이터 출력
+            document.getElementById('meta').innerHTML = `
+      <p><b>Index:</b> ${b.Index}</p>
+      <p><b>OTT ID:</b> ${b.OttID}</p>
+      <p><b>Timestamp:</b> ${b.Timestamp}</p>
+      <p><b>PrevHash:</b> ${b.PrevHash}</p>
+      <p><b>MerkleRoot:</b> ${b.MerkleRoot}</p>
+      <p><b>Nonce:</b> ${b.Nonce}</p>
+      <p><b>Difficulty:</b> ${b.Difficulty}</p>
+      <p><b>Hash:</b> ${b.BlockHash}</p>
+    `;
+
+            // AnchorRecord 상세 출력
+            const html = b.Records.map((r,i) => `
+        <div class="record">
+            <h3>${i+1}. CP: ${r.cp_id}</h3>
+            <p><b>Lower Root:</b> ${r.lower_root}</p>
+            <p><b>Anchor Timestamp:</b> ${r.anchor_ts}</p>
+
+            <h4>Access Catalog</h4>
+            <pre>${JSON.stringify(r.access_catalog, null, 2)}</pre>
+
+            <h4>Contract Snapshot</h4>
+            <pre>${JSON.stringify(r.contract_snapshot, null, 2)}</pre>
+        </div>
+    `).join('');
+
+            document.getElementById('records').innerHTML = html;
+        });
+</script>
+
+</body>
+</html>
