@@ -17,12 +17,16 @@ import (
 ////////////////////////////////////////////////////////////////////////////////
 
 type LowerChain struct {
-	cpID       string
-	difficulty int // 체인 난이도 (모든 노드 동일)
+	cpID          string
+	difficulty    int             // 체인 난이도 (모든 노드 동일)
+	pending       []ContentRecord // 아직 블록에 포함되지 않은 CP 루트 (CPID => Root)
+	pendingMu     sync.Mutex
+	lastBlockTime time.Time // 마지막 블록 생성 시각
 }
 
 // 전역 상태 관리 변수
 var (
+	ch         *LowerChain  // 현재 체인 포인터
 	self       string       // 현재 노드 주소 NODE_ADDR (예: "cp-node-01:5000")
 	boot       string       // 현재 네트워크 상의 부트노드 주소
 	startedAt  = time.Now() // 현재 노드 시작 시간
@@ -37,13 +41,15 @@ func newLowerChain(cpID string) (*LowerChain, error) {
 	ch := &LowerChain{
 		cpID:       cpID,
 		difficulty: GlobalDifficulty,
+		pending:    []ContentRecord{},
 	}
 
 	// 제네시스 블록 존재 여부 확인
-	blk0, err := getBlockByIndex(0)
+	genesis, err := getBlockByIndex(0)
 	if err != nil {
-		// 없으면 새로 생성
-		genesis := createGenesisBlock(cpID)
+		logInfo("[INIT][CHAIN] No Genesis Block found. Mining genesis block...")
+		genesis = mineGenesisBlock(cpID)
+
 		if err := saveBlockToDB(genesis); err != nil {
 			return nil, fmt.Errorf("save genesis: %w", err)
 		}
@@ -56,16 +62,14 @@ func newLowerChain(cpID string) (*LowerChain, error) {
 		if err := setLatestHeight(0); err != nil {
 			return nil, fmt.Errorf("meta height: %w", err)
 		}
-		logInfo("[INIT] Created genesis block for %s", cpID)
-		return ch, nil
+
+		logInfo("[INIT] Created genesis block for %s (hash=%s)", cpID, genesis.BlockHash[:12])
 	}
 
 	// cpID 일치성 확인
-	if blk0.CpID != cpID {
-		return nil, fmt.Errorf("cp_id mismatch: db=%q new=%q", blk0.CpID, cpID)
+	if genesis.CpID != cpID {
+		return nil, fmt.Errorf("cp_id mismatch: db=%q new=%q", genesis.CpID, cpID)
 	}
-
-	logInfo("[INIT] Loaded existing chain for %s (genesis hash=%s)", cpID, blk0.BlockHash[:12])
 	return ch, nil
 }
 
@@ -128,6 +132,9 @@ func onBlockReceived(lb LowerBlock) error {
 	if err := setLatestHeight(lb.Index); err != nil {
 		return fmt.Errorf("set height: %w", err)
 	}
+
+	// 마지막 블록 생성 시각 업데이트
+	ch.lastBlockTime = time.Now()
 
 	// 부트노드일 경우, 서명하여 OTT 체인으로 제출
 	if self == boot {

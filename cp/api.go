@@ -169,21 +169,21 @@ func RegisterAPI(mux *http.ServeMux, chain *LowerChain) {
 
 	// 최초 채굴 요청을 받아 모든 노드에 채굴을 시작시키는 트리거
 	mux.HandleFunc("/mine", func(w http.ResponseWriter, r *http.Request) {
-		var rec ContentRecord
+		var rec []ContentRecord
 		if err := json.NewDecoder(r.Body).Decode(&rec); err != nil {
 			http.Error(w, "invalid content record", http.StatusBadRequest)
 			return
 		}
 		defer r.Body.Close()
 
-		log.Printf("[API][MINE] Mining trigger received with content: %s", rec.ContentID)
+		log.Printf("[API][MINE] Mining trigger received with content: %s", len(rec))
 
-		go triggerNetworkMining([]ContentRecord{rec}) // 데이터 전달
+		go triggerNetworkMining(rec) // 데이터 전달
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{
-			"status":     "mining triggered",
-			"content_id": rec.ContentID,
+		json.NewEncoder(w).Encode(map[string]any{
+			"status": "Mining Request Submitted",
+			"count":  len(rec),
 		})
 	})
 }

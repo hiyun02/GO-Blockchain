@@ -21,7 +21,7 @@ import (
 ////////////////////////////////////////////////////////////////////////////////
 
 // 전역 난이도 설정 (모든 노드 동일)
-const GlobalDifficulty = 4 // 예: 해시가 "0000"으로 시작해야 성공
+var GlobalDifficulty = 4 // 예: 해시가 "0000"으로 시작해야 성공
 
 // 채굴 중단 플래그 (다른 노드가 성공하면 true)
 var miningStop atomic.Bool
@@ -213,4 +213,28 @@ func addBlockToChain(header PoWHeader, hash string, anchors []AnchorRecord) {
 		BlockHash:  hash,
 	}
 	onBlockReceived(block)
+}
+
+// 채굴 난이도 조정
+// 호출된 순간: now - lastBlockTime 비교
+// 입력/출력 값 없음,  LowerChain 내부 difficulty만 갱신
+func adjustDifficulty() {
+	now := time.Now()
+	elapsed := now.Sub(ch.lastBlockTime)
+
+	if elapsed > BlockInterval {
+		GlobalDifficulty--
+		if GlobalDifficulty < 1 {
+			GlobalDifficulty = 1
+		}
+		log.Printf("[DIFF] Block time= %v > Target ==> Difficulty-- => %d",
+			elapsed, GlobalDifficulty)
+	} else {
+		GlobalDifficulty++
+		log.Printf("[DIFF] Block time= %v < Target ==> Difficulty++ => %d",
+			elapsed, GlobalDifficulty)
+	}
+
+	// 마지막 블록 시간 갱신
+	ch.lastBlockTime = now
 }

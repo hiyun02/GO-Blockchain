@@ -1,5 +1,11 @@
 package main
 
+import (
+	"log"
+	"strings"
+	"time"
+)
+
 ////////////////////////////////////////////////////////////////////////////////
 // LowerBlock (CP 체인 블록 구조)
 // ------------------------------------------------------------
@@ -24,27 +30,52 @@ type LowerBlock struct {
 	BlockHash  string          `json:"block_hash"`  // 블록 전체 해시 (헤더 기준)
 }
 
-// 제네시스 상수
-const (
-	genesisTimestamp = "1970-01-01T00:00:00Z"                                             // 재현성 보장
-	prevHashZeros    = "0000000000000000000000000000000000000000000000000000000000000000" // 64자리 0
-)
-
 // 제네시스 블록 생성
-func createGenesisBlock(cpID string) LowerBlock {
-	root := sha256Hex([]byte{}) // 빈 MerkleRoot
-	genesis := LowerBlock{
-		Index:      0,
-		CpID:       cpID,
-		PrevHash:   prevHashZeros,
-		Timestamp:  genesisTimestamp,
-		Entries:    []ContentRecord{},
-		MerkleRoot: root,
-		Nonce:      0,
-		Difficulty: 0,
+func mineGenesisBlock(cpID string) LowerBlock {
+	log.Printf("[PoW] Mining genesis block...")
+	ch.lastBlockTime = time.Now()
+	// 제네시스는 엔트리 없음, merkleRoot는 sha256("")
+	merkleRoot := sha256Hex([]byte{})
+	prevHash := strings.Repeat("0", 64)
+	index := 0
+
+	header := PoWHeader{
+		Index:      index,
+		PrevHash:   prevHash,
+		MerkleRoot: merkleRoot,
+		Timestamp:  time.Now().Unix(),
+		Difficulty: GlobalDifficulty,
 	}
-	genesis.BlockHash = genesis.computeHash()
-	return genesis
+
+	// === 제네시스 Nonce 탐색 ===
+	nonce := 0
+	var hash string
+
+	for {
+		header.Nonce = nonce
+		hash = computeHashForPoW(header)
+		if validHash(hash, GlobalDifficulty) {
+			log.Printf("[PoW] GENESIS mined: nonce=%d hash=%s", nonce, hash)
+			break
+		}
+		nonce++
+	}
+
+	// === LowerBlock으로 변환 ===
+	blk := LowerBlock{
+		Index:      index,
+		CpID:       cpID,
+		PrevHash:   prevHash,
+		Timestamp:  time.Unix(header.Timestamp, 0).Format(time.RFC3339),
+		Entries:    []ContentRecord{}, // Genesis는 Entry 없음
+		MerkleRoot: merkleRoot,
+		Nonce:      header.Nonce,
+		Difficulty: GlobalDifficulty,
+		BlockHash:  hash,
+	}
+	// 난이도 조정 수행
+	adjustDifficulty()
+	return blk
 }
 
 // 블록 헤더 기준 해시 계산
