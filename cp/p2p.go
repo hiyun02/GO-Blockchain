@@ -74,21 +74,23 @@ type blocksPage struct {
 
 // 입력받은 주소의 노드에게 장부 정보를 제공받는 함수
 func syncChain(peer string) {
-	// 로컬 상태
-	chainMu.Lock()
-	localH, ok := getLatestHeight()
-	if !ok {
-		chainMu.Unlock()
-		log.Printf("[P2P] Local chain not initialized (height meta missing)\n")
-		return
-	}
-	chainMu.Unlock()
-
 	baseURL := "http://" + peer + "/blocks"
 	offset := 0
 	limit := 256 // 페이지 크기 (조정 가능)
 	var remoteTotal int
 	appended := 0
+
+	// 로컬 상태
+	chainMu.Lock()
+	localH, ok := getLatestHeight()
+	chainMu.Unlock()
+
+	// 제네시스가 없는 경우, localH를 -1로 설정하여
+	// 아무 블록도 없음을 명확히 표현
+	if !ok {
+		localH = -1
+		log.Printf("[P2P] No local blocks. Will fetch full chain from %s\n", peer)
+	}
 
 	for {
 		// 원격 페이지 요청
@@ -108,8 +110,9 @@ func syncChain(peer string) {
 
 		if offset == 0 {
 			remoteTotal = page.Total
-			// 원격이 더 길지 않으면 종료
-			if remoteTotal <= localH+1 {
+			// 로컬이 아무 블록도 없으면 전체 sync
+			// 로컬이 있고 원격이 더 길지 않으면 종료
+			if localH >= 0 && remoteTotal <= localH+1 {
 				log.Printf("[P2P] Up-to-date (local=%d, remote=%d)\n", localH+1, remoteTotal)
 				return
 			}
@@ -122,17 +125,27 @@ func syncChain(peer string) {
 				continue
 			}
 			chainMu.Lock()
-			prev, err := getBlockByIndex(localH)
-			if err != nil {
-				chainMu.Unlock()
-				log.Printf("[P2P] Load local prev error at %d: %v\n", localH, err)
-				return
+
+			// 제네시스(블록0) 처리: prev가 없음 -> validate 불필요
+			if nb.Index == 0 {
+				log.Printf("[P2P] Fetching genesis from %s", peer)
+			} else {
+				// prev 블록 가져오기
+				prev, err := getBlockByIndex(nb.Index - 1)
+				if err != nil {
+					chainMu.Unlock()
+					log.Printf("[P2P] Missing prev block #%d while syncing\n", nb.Index-1)
+					return
+				}
+
+				// 검증
+				if err := validateLowerBlock(nb, prev); err != nil {
+					chainMu.Unlock()
+					log.Printf("[P2P] Remote block invalid at #%d: %v\n", nb.Index, err)
+					return
+				}
 			}
-			if err := validateLowerBlock(nb, prev); err != nil {
-				chainMu.Unlock()
-				log.Printf("[P2P] Remote block invalid at #%d: %v\n", nb.Index, err)
-				return
-			}
+
 			// append
 			if err := saveBlockToDB(nb); err != nil {
 				chainMu.Unlock()

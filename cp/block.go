@@ -62,7 +62,7 @@ func mineGenesisBlock(cpID string) LowerBlock {
 	}
 
 	// === LowerBlock으로 변환 ===
-	blk := LowerBlock{
+	genesis := LowerBlock{
 		Index:      index,
 		CpID:       cpID,
 		PrevHash:   prevHash,
@@ -75,7 +75,7 @@ func mineGenesisBlock(cpID string) LowerBlock {
 	}
 	// 난이도 조정 수행
 	adjustDifficulty()
-	return blk
+	return genesis
 }
 
 // 블록 헤더 기준 해시 계산

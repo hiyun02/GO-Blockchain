@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"strconv"
 	"strings"
 	"sync"
@@ -38,7 +39,7 @@ var (
 
 // 체인 초기화 및 제네시스 확인
 func newLowerChain(cpID string) (*LowerChain, error) {
-	ch := &LowerChain{
+	ch = &LowerChain{
 		cpID:       cpID,
 		difficulty: GlobalDifficulty,
 		pending:    []ContentRecord{},
@@ -46,30 +47,33 @@ func newLowerChain(cpID string) (*LowerChain, error) {
 
 	// 제네시스 블록 존재 여부 확인
 	genesis, err := getBlockByIndex(0)
+	// 제네시스 블록이 없는 경우
 	if err != nil {
-		logInfo("[INIT][CHAIN] No Genesis Block found. Mining genesis block...")
-		genesis = mineGenesisBlock(cpID)
+		// 제네시스 블록이 없고, 현재노드가 부트노드인 경우에만 제네시스블록 채굴
+		if self == boot {
+			log.Printf("[INIT] No genesis. Boot node mining genesis...")
+			genesis = mineGenesisBlock(cpID)
 
-		if err := saveBlockToDB(genesis); err != nil {
-			return nil, fmt.Errorf("save genesis: %w", err)
-		}
-		if err := updateIndicesForBlock(genesis); err != nil {
-			return nil, fmt.Errorf("index genesis: %w", err)
-		}
-		if err := putMeta("meta_cp_id", cpID); err != nil {
-			return nil, fmt.Errorf("meta cp_id: %w", err)
-		}
-		if err := setLatestHeight(0); err != nil {
-			return nil, fmt.Errorf("meta height: %w", err)
+			saveBlockToDB(genesis)
+			updateIndicesForBlock(genesis)
+			setLatestHeight(0)
+
+			// 부트노드는 여기서 meta_cp_id 저장
+			putMeta("meta_cp_id", cpID)
+			return ch, nil
 		}
 
-		logInfo("[INIT] Created genesis block for %s (hash=%s)", cpID, genesis.BlockHash[:12])
+		// 제네시스 없고 부트노드가 아니면, 아직 syncChain이 안 된 상태
+		// => meta_cp_id는 지금 저장하면 안 됨
+		log.Printf("[INIT] No local genesis. Waiting for sync...")
+		return ch, nil
 	}
 
-	// cpID 일치성 확인
-	if genesis.CpID != cpID {
-		return nil, fmt.Errorf("cp_id mismatch: db=%q new=%q", genesis.CpID, cpID)
+	// block_0 존재하는 경우 => genesis.CpID 를 meta_cp_id 로 저장
+	if err := putMeta("meta_cp_id", genesis.CpID); err != nil {
+		return nil, err
 	}
+
 	return ch, nil
 }
 
@@ -135,7 +139,6 @@ func onBlockReceived(lb LowerBlock) error {
 
 	// 마지막 블록 생성 시각 업데이트
 	ch.lastBlockTime = time.Now()
-
 	// 부트노드일 경우, 서명하여 OTT 체인으로 제출
 	if self == boot {
 		submitAnchor(lb)
