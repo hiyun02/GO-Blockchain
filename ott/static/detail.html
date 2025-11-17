@@ -19,41 +19,42 @@
 <div id="records"></div>
 
 <script>
-    // URL 파라미터에서 id 얻기
     const params = new URLSearchParams(window.location.search);
     const id = params.get("id");
 
-    // API 호출
     fetch(`/block/index?id=${id}`)
         .then(r => r.json())
         .then(b => {
 
-            // 블록 메타데이터 출력
+            // UpperBlock 메타 정보 표시
             document.getElementById('meta').innerHTML = `
-      <p><b>Index:</b> ${b.Index}</p>
-      <p><b>OTT ID:</b> ${b.OttID}</p>
-      <p><b>Timestamp:</b> ${b.Timestamp}</p>
-      <p><b>PrevHash:</b> ${b.PrevHash}</p>
-      <p><b>MerkleRoot:</b> ${b.MerkleRoot}</p>
-      <p><b>Nonce:</b> ${b.Nonce}</p>
-      <p><b>Difficulty:</b> ${b.Difficulty}</p>
-      <p><b>Hash:</b> ${b.BlockHash}</p>
-    `;
+                <p><b>Index:</b> ${b.index}</p>
+                <p><b>OTT ID:</b> ${b.ott_id}</p>
+                <p><b>Timestamp:</b> ${b.timestamp}</p>
+                <p><b>PrevHash:</b> ${b.prev_hash}</p>
+                <p><b>MerkleRoot:</b> ${b.merkle_root}</p>
+                <p><b>Nonce:</b> ${b.nonce}</p>
+                <p><b>Difficulty:</b> ${b.difficulty}</p>
+                <p><b>Hash:</b> ${b.block_hash}</p>
+            `;
 
-            // AnchorRecord 상세 출력
-            const html = b.Records.map((r,i) => `
-        <div class="record">
-            <h3>${i+1}. CP: ${r.cp_id}</h3>
-            <p><b>Lower Root:</b> ${r.lower_root}</p>
-            <p><b>Anchor Timestamp:</b> ${r.anchor_ts}</p>
+            // records 배열 없을 경우 안전 처리
+            const recs = Array.isArray(b.records) ? b.records : [];
 
-            <h4>Access Catalog</h4>
-            <pre>${JSON.stringify(r.access_catalog, null, 2)}</pre>
+            const html = recs.map((r, i) => `
+                <div class="record">
+                    <h3>${i+1}. CP: ${r.cp_id}</h3>
 
-            <h4>Contract Snapshot</h4>
-            <pre>${JSON.stringify(r.contract_snapshot, null, 2)}</pre>
-        </div>
-    `).join('');
+                    <p><b>Lower Root:</b> ${r.lower_root}</p>
+                    <p><b>Anchor Timestamp:</b> ${r.anchor_ts}</p>
+
+                    <h4>Access Catalog</h4>
+                    <pre>${JSON.stringify(r.access_catalog, null, 2)}</pre>
+
+                    <h4>Contract Snapshot</h4>
+                    <pre>${JSON.stringify(r.contract_snapshot, null, 2)}</pre>
+                </div>
+            `).join('');
 
             document.getElementById('records').innerHTML = html;
         });

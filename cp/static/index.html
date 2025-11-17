@@ -63,13 +63,13 @@
             const html = d.items.map(b => `
       <div class="block">
         <div class="title">
-          <a href="/detail.html?id=${b.Index}">
-            Block #${b.Index}
+          <a href="/detail.html?id=${b.index}">
+            Block #${b.index}
           </a>
         </div>
-        <p>Timestamp: ${b.Timestamp}</p>
-        <p>Entries: ${b.Entries ? b.Entries.length : 0}</p>
-        <p>Hash: ${b.BlockHash.slice(0,16)}...</p>
+        <p>Timestamp: ${b.timestamp}</p>
+        <p>Entries: ${b.entries ? b.entries.length : 0}</p>
+        <p>Hash: ${b.block_hash}</p>
       </div>
     `).join("");
 

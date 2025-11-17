@@ -91,7 +91,7 @@ func handleMineStart(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		log.Printf("[PoW][NODE] ✅ Mined block #%d hash=%s", result.Header.Index, result.BlockHash[:12])
-		broadcastBlock(result, nil)
+		broadcastBlock(result, req.Entries)
 	}()
 
 	w.Header().Set("Content-Type", "application/json")

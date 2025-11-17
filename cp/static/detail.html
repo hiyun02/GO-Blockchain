@@ -26,13 +26,13 @@
         .then(b => {
             // 메타데이터
             document.getElementById('meta').innerHTML = `
-      <p><b>Index:</b> ${b.Index}</p>
-      <p><b>Timestamp:</b> ${b.Timestamp}</p>
-      <p><b>PrevHash:</b> ${b.PrevHash}</p>
-      <p><b>Hash:</b> ${b.BlockHash}</p>
-      <p><b>MerkleRoot:</b> ${b.MerkleRoot}</p>
-      <p><b>Nonce:</b> ${b.Nonce}</p>
-      <p><b>Difficulty:</b> ${b.Difficulty}</p>
+      <p><b>Index:</b> ${b.index}</p>
+      <p><b>Timestamp:</b> ${b.timestamp}</p>
+      <p><b>PrevHash:</b> ${b.prev_hash}</p>
+      <p><b>Hash:</b> ${b.block_hash}</p>
+      <p><b>MerkleRoot:</b> ${b.merkle_root}</p>
+      <p><b>Nonce:</b> ${b.nonce}</p>
+      <p><b>Difficulty:</b> ${b.difficulty}</p>
     `;
 
             // 엔트리 출력

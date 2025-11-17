@@ -46,13 +46,13 @@
             const html = d.items.map(b => `
       <div class="block">
         <div class="title">
-          <a href="/detail.html?id=${b.Index}">
-            OTT Block #${b.Index}
+          <a href="/detail.html?id=${b.index}">
+            OTT Block #${b.index}
           </a>
         </div>
-        <p><b>Timestamp:</b> ${b.Timestamp}</p>
-        <p><b>Records:</b> ${b.Records ? b.Records.length : 0} 개</p>
-        <p><b>Hash:</b> ${b.BlockHash.slice(0,16)}...</p>
+        <p><b>Timestamp:</b> ${b.timestamp}</p>
+        <p><b>Records:</b> ${b.records ? b.records.length : 0} 개</p>
+        <p><b>Hash:</b> ${b.block_hash}</p>
       </div>
     `).join('');
             document.getElementById('blocks').innerHTML = html;
