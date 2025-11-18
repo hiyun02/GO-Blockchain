@@ -15,8 +15,8 @@ import (
 // 부트노드가 신규 노드의 주소를 등록하고,
 // 신규 노드에게 현재 피어 목록을 제공함
 type registerReq struct {
-	Addr string `json:"addr"` // "host:port" 또는 "컨테이너명:포트"
-	CpID string `json:"cp_id"`
+	Addr  string `json:"addr"` // "host:port" 또는 "컨테이너명:포트"
+	OttID string `json:"ott_id"`
 }
 type registerResp struct {
 	Peers []string `json:"peers"`
@@ -35,10 +35,10 @@ func registerPeer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 체인 정체성 확인: 제네시스 cp_id와 일치해야 가입 허용
+	// 체인 정체성 확인: 제네시스 ott_id와 일치해야 가입 허용
 	blk0, err := getBlockByIndex(0)
-	if err != nil || blk0.OttID != req.CpID {
-		http.Error(w, "cp_id mismatch", http.StatusForbidden)
+	if err != nil || blk0.OttID != req.OttID {
+		http.Error(w, "ott_id mismatch", http.StatusForbidden)
 		return
 	}
 
@@ -50,7 +50,7 @@ func registerPeer(w http.ResponseWriter, r *http.Request) {
 	// 등록된 주소가 아니라면 추가
 	if !already {
 		peers = append(peers, req.Addr)
-		log.Printf("[P2P][REGISTER] new peer joined: %s (cp_id=%s) | total=%d", req.Addr, req.CpID, len(peers))
+		log.Printf("[P2P][REGISTER] new peer joined: %s (cp_id=%s) | total=%d", req.Addr, req.OttID, len(peers))
 	} else {
 		log.Printf("[P2P][REGISTER] peer already exists: %s", req.Addr)
 	}
