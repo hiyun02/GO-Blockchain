@@ -33,7 +33,7 @@ type LowerBlock struct {
 // 제네시스 블록 생성
 func mineGenesisBlock(cpID string) LowerBlock {
 	log.Printf("[PoW] Mining genesis block...")
-	ch.lastBlockTime = time.Now()
+	mineStart := time.Now()
 	// 제네시스는 엔트리 없음, merkleRoot는 sha256("")
 	merkleRoot := sha256Hex([]byte{})
 	prevHash := strings.Repeat("0", 64)
@@ -73,8 +73,9 @@ func mineGenesisBlock(cpID string) LowerBlock {
 		Difficulty: GlobalDifficulty,
 		BlockHash:  hash,
 	}
+	mineEnd := time.Now()
 	// 난이도 조정 수행
-	adjustDifficulty()
+	adjustDifficulty(mineStart, mineEnd)
 	return genesis
 }
 

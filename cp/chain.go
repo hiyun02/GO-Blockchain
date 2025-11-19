@@ -27,14 +27,18 @@ type LowerChain struct {
 
 // 전역 상태 관리 변수
 var (
-	ch         *LowerChain  // 현재 체인 포인터
-	self       string       // 현재 노드 주소 NODE_ADDR (예: "cp-node-01:5000")
-	boot       string       // 현재 네트워크 상의 부트노드 주소
-	startedAt  = time.Now() // 현재 노드 시작 시간
-	isBoot     atomic.Bool  // 현재 노드가 부트노드인지 여부
-	bootAddrMu sync.RWMutex // 부트노드 주소 접근 시 동시성 보호용 RW 잠금 객체
-	ottBoot    string       // ott 체인의 부트노드 주소 (예 : "ott-node-01:5000")
-	ottBootMu  sync.RWMutex // ottBoot 접근 시 동시성 보호용 RW 잠금 객체
+	ch               *LowerChain        // 현재 체인 포인터
+	self             string             // 현재 노드 주소 NODE_ADDR (예: "cp-node-01:5000")
+	boot             string             // 현재 네트워크 상의 부트노드 주소
+	startedAt        = time.Now()       // 현재 노드 시작 시간
+	isBoot           atomic.Bool        // 현재 노드가 부트노드인지 여부
+	bootAddrMu       sync.RWMutex       // 부트노드 주소 접근 시 동시성 보호용 RW 잠금 객체
+	ottBoot          string             // ott 체인의 부트노드 주소 (예 : "ott-node-01:5000")
+	ottBootMu        sync.RWMutex       // ottBoot 접근 시 동시성 보호용 RW 잠금 객체
+	GlobalDifficulty = 6                // 전역 난이도 설정 (모든 노드 동일)
+	isMining         atomic.Bool        // 내부적인 채굴 상태 플래그
+	miningStop       atomic.Bool        // 다른 노드에게 영향받는 채굴 중단 플래그 (다른 노드가 성공하면 true)
+	TargetBlockTime  = 20 * time.Second // 채굴 기준시간(20초)
 )
 
 // 체인 초기화 및 제네시스 확인
@@ -54,9 +58,17 @@ func newLowerChain(cpID string) (*LowerChain, error) {
 			log.Printf("[INIT] No genesis. Boot node mining genesis...")
 			genesis = mineGenesisBlock(cpID)
 
-			saveBlockToDB(genesis)
-			updateIndicesForBlock(genesis)
-			setLatestHeight(0)
+			// 체인에 추가
+			if err := saveBlockToDB(genesis); err != nil {
+				return nil, fmt.Errorf("save genesis block: %w", err)
+			}
+			if err := updateIndicesForBlock(genesis); err != nil {
+				return nil, fmt.Errorf("update genesis indices: %w", err)
+			}
+			if err := setLatestHeight(genesis.Index); err != nil {
+				return nil, fmt.Errorf("set genesis height: %w", err)
+			}
+			ch.lastBlockTime = time.Now()
 
 			// 부트노드는 여기서 meta_cp_id 저장
 			putMeta("meta_cp_id", cpID)
@@ -136,7 +148,6 @@ func onBlockReceived(lb LowerBlock) error {
 	if err := setLatestHeight(lb.Index); err != nil {
 		return fmt.Errorf("set height: %w", err)
 	}
-
 	// 마지막 블록 생성 시각 업데이트
 	ch.lastBlockTime = time.Now()
 	// 부트노드일 경우, 서명하여 OTT 체인으로 제출
@@ -146,6 +157,31 @@ func onBlockReceived(lb LowerBlock) error {
 	}
 	logInfo("[CHAIN] Accepted New Block #%d (%s)", lb.Index, lb.BlockHash[:12])
 	return nil
+}
+
+func appendPending(entries []ContentRecord) {
+	ch.pendingMu.Lock()
+	ch.pending = append(ch.pending, entries...)
+	ch.pendingMu.Unlock()
+	log.Printf("[CHAIN][PENDING] Append pending entries (%d items)", len(entries))
+}
+
+func popPending() []ContentRecord {
+	ch.pendingMu.Lock()
+	defer ch.pendingMu.Unlock()
+	// 복사본 생성
+	entries := make([]ContentRecord, len(ch.pending))
+	copy(entries, ch.pending)
+	// 원본 비우기
+	ch.pending = []ContentRecord{}
+	log.Printf("[CHAIN][PENDING] Pop pending entries (%d items)", len(entries))
+	return entries
+}
+
+func pendingIsEmpty() bool {
+	ch.pendingMu.Lock()
+	defer ch.pendingMu.Unlock()
+	return len(ch.pending) == 0
 }
 
 // 간단 로그 출력 함수

@@ -156,6 +156,7 @@ func RegisterAPI(mux *http.ServeMux, chain *LowerChain) {
 			"bootAddr":   boot,
 			"started_at": startedAt.Format(time.RFC3339),
 			"peers":      peersSnapshot(),
+			"difficulty": GlobalDifficulty,
 			"ott_boot":   getOttBoot(),
 		})
 	})
@@ -176,7 +177,7 @@ func RegisterAPI(mux *http.ServeMux, chain *LowerChain) {
 		}
 		defer r.Body.Close()
 
-		log.Printf("[API][MINE] Mining trigger received with content: %s", len(rec))
+		log.Printf("[API][MINE] Mining trigger received with content: %d", len(rec))
 
 		go triggerNetworkMining(rec) // 데이터 전달
 

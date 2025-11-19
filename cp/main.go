@@ -40,7 +40,8 @@ func main() {
 	// 노드 간 통신 엔드포인트 등록
 	//     - /addPeer : 기존 노드들이 신규 노드를 추가
 	//	   - /mine/start : 노드 간 채굴 요청 전파
-	//     - /receive : 다른 노드가 보낸 확정 블록 수신
+	//     - /receivePending : 다른 노드가 보낸 컨텐츠 내용 수신
+	//     - /receiveBlock : 다른 노드가 보낸 확정 블록 수신
 	//	   - /register : 부트노드 연결 및 네트워크 연결
 	//	   - /bootNotify : 부트노드 변경 수신
 	//	   - /getPublicKey : 공개키 반환
@@ -48,7 +49,8 @@ func main() {
 	//	   - /ottBootNotify : CP 부트노드로부터 전파된 OTT 부트노드 주소 수신
 	mux.HandleFunc("/addPeer", addPeer)
 	mux.HandleFunc("/mine/start", handleMineStart)
-	mux.HandleFunc("/receive", receive)
+	mux.HandleFunc("/receivePending", receivePending)
+	mux.HandleFunc("/receiveBlock", receiveBlock)
 	mux.HandleFunc("/register", registerPeer)
 	mux.HandleFunc("/bootNotify", bootNotify)
 	mux.HandleFunc("/getPublicKey", getPublicKey)

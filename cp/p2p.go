@@ -213,6 +213,7 @@ func addPeerInternal(addr string) bool {
 	return true
 }
 
+// 자신을 제외한 나머지 노드들의 주소 반환
 func peersSnapshot() []string {
 	peerMu.Lock()
 	defer peerMu.Unlock()
@@ -297,4 +298,19 @@ func startNetworkWatcher() {
 			}
 		}
 	}
+}
+
+// 모든 노드에 전파된 컨텐츠 엔트리를 수신하여 메모리풀에 추가
+// POST : /receivePending 요청을 통해 트리거
+func receivePending(w http.ResponseWriter, r *http.Request) {
+	var msg struct {
+		Entries []ContentRecord `json:"entries"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&msg); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	defer r.Body.Close()
+	appendPending(msg.Entries)
+	log.Printf("[P2P] Content Entries saved to Pending : %d", len(msg.Entries))
 }
