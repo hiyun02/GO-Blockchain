@@ -62,7 +62,7 @@ func mineGenesisBlock(cpID string) LowerBlock {
 		nonce++
 	}
 	mineEnd := time.Now()
-	elapsed := int64(mineEnd.Sub(mineStart))
+	elapsed := int64(mineEnd.Sub(mineStart).Seconds())
 	// === LowerBlock으로 변환 ===
 	genesis := LowerBlock{
 		Index:      index,
