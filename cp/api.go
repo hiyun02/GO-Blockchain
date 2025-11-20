@@ -114,10 +114,11 @@ func RegisterAPI(mux *http.ServeMux, chain *LowerChain) {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
-			"total":  total,
-			"offset": offset,
-			"limit":  limit,
-			"items":  blocks,
+			"total":      total,
+			"offset":     offset,
+			"limit":      limit,
+			"items":      blocks,
+			"difficulty": GlobalDifficulty,
 		})
 	})
 

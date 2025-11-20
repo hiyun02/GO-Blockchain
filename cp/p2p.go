@@ -66,10 +66,11 @@ func validateLowerBlock(newBlk, prevBlk LowerBlock) error {
 // - 원격 total > 로컬 total : 로컬 height+1 부터 순서대로 검증/append
 // -----------------------------------------------------------------------------
 type blocksPage struct {
-	Total  int          `json:"total"`
-	Offset int          `json:"offset"`
-	Limit  int          `json:"limit"`
-	Items  []LowerBlock `json:"items"`
+	Total      int          `json:"total"`
+	Offset     int          `json:"offset"`
+	Limit      int          `json:"limit"`
+	Items      []LowerBlock `json:"items"`
+	Difficulty int          `json:"difficulty"`
 }
 
 // 입력받은 주소의 노드에게 장부 정보를 제공받는 함수
@@ -110,6 +111,11 @@ func syncChain(peer string) {
 
 		if offset == 0 {
 			remoteTotal = page.Total
+			if page.Difficulty > 0 && page.Difficulty != GlobalDifficulty {
+				log.Printf("[P2P] Difficulty update from peer=%s -> %d", peer, page.Difficulty)
+				GlobalDifficulty = page.Difficulty
+			}
+
 			// 로컬이 아무 블록도 없으면 전체 sync
 			// 로컬이 있고 원격이 더 길지 않으면 종료
 			if localH >= 0 && remoteTotal <= localH+1 {
@@ -172,7 +178,6 @@ func syncChain(peer string) {
 			break
 		}
 	}
-
 	log.Printf("[P2P] Chain synced from %s (+%d blocks, new height=%d)\n", peer, appended, localH)
 }
 

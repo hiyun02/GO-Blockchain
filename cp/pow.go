@@ -38,13 +38,13 @@ type MineResult struct {
 
 // 네트워크 전체에 채굴 요청 혹은 Entries를 전달
 func triggerNetworkMining(entries []ContentRecord) {
+	req, _ := json.Marshal(map[string]any{"entries": entries})
 	// 넘겨받은 entries가 비어있지 않다면
 	if len(entries) != 0 {
 		appendPending(entries)
 		// 이미 채굴 중이면 네트워크에 entries 전파
 		if isMining.Load() {
-			req, _ := json.Marshal(map[string]any{"entries": entries})
-			log.Printf("[POW] already mining => add %d entries to Network's Pending", len(entries))
+			log.Printf("[POW] Already Mining => add %d entries to Network's Pending", len(entries))
 			// 노드 주소 목록을 순회하며 신규 entries 전달
 			for _, peer := range peersSnapshot() {
 				go func(addr string) {
@@ -61,7 +61,7 @@ func triggerNetworkMining(entries []ContentRecord) {
 		log.Printf("[POW][NETWORK] Starting Network Mining Order")
 		for _, peer := range peersSnapshot() {
 			go func(addr string) {
-				http.Get("http://" + addr + "/mine/start")
+				http.Post("http://"+addr+"/mine/start", "application/json", strings.NewReader(string(req)))
 				log.Printf("[POW][NETWORK] Broadcasted Mining signal to %s", addr)
 			}(peer)
 		}
@@ -72,8 +72,19 @@ func triggerNetworkMining(entries []ContentRecord) {
 
 // 각 노드에서 채굴 요청 수신 및 채굴 수행
 func handleMineStart(w http.ResponseWriter, r *http.Request) {
-	log.Printf("[PoW][NODE] Received mining start signal")
+	var req struct {
+		Entries []ContentRecord `json:"entries"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+	defer r.Body.Close()
+
+	log.Printf("[PoW][NODE] Received mining start signal with entries: %d", len(req.Entries))
+	appendPending(req.Entries)
 	entries := popPending() // pending에 쌓여있던 entries를 불러옴
+	log.Printf("[PoW][NODE] Received mining start signal with Pending entries: %d", len(entries))
 	go func(entries []ContentRecord) {
 		// 꺼낸 entries를 활용해 실제 채굴 시작
 		result := mineBlock(GlobalDifficulty, entries)
