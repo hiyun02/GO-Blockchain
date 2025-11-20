@@ -35,7 +35,7 @@ var (
 	bootAddrMu       sync.RWMutex       // 부트노드 주소 접근 시 동시성 보호용 RW 잠금 객체
 	ottBoot          string             // ott 체인의 부트노드 주소 (예 : "ott-node-01:5000")
 	ottBootMu        sync.RWMutex       // ottBoot 접근 시 동시성 보호용 RW 잠금 객체
-	GlobalDifficulty = 6                // 전역 난이도 설정 (모든 노드 동일)
+	GlobalDifficulty = 4                // 전역 난이도 설정 (모든 노드 동일)
 	isMining         atomic.Bool        // 내부적인 채굴 상태 플래그
 	miningStop       atomic.Bool        // 다른 노드에게 영향받는 채굴 중단 플래그 (다른 노드가 성공하면 true)
 	TargetBlockTime  = 20 * time.Second // 채굴 기준시간(20초)
