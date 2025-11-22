@@ -40,32 +40,23 @@ type MineResult struct {
 // 네트워크 전체에 채굴 요청 혹은 Entries를 전달
 func triggerNetworkMining(entries []ContentRecord) {
 	req, _ := json.Marshal(map[string]any{"entries": entries})
-	// 넘겨받은 entries가 비어있지 않다면
-	if len(entries) != 0 {
-		appendPending(entries)
-		// 이미 채굴 중이면 네트워크에 entries 전파
-		if isMining.Load() {
-			log.Printf("[POW] Already Mining => add %d entries to Network's Pending", len(entries))
-			// 노드 주소 목록을 순회하며 신규 entries 전달
-			for _, peer := range peersSnapshot() {
-				go func(addr string) {
-					http.Post("http://"+addr+"/receivePending", "application/json", strings.NewReader(string(req)))
-					log.Printf("[POW][NETWORK] Broadcasted Pending to %s", addr)
-				}(peer)
-			}
+	// 이미 채굴 중이면 네트워크에 entries 전파
+	if isMining.Load() {
+		log.Printf("[POW] Already Mining => add %d entries to Network's Pending", len(entries))
+		// 노드 주소 목록을 순회하며 신규 entries 전달
+		for _, addr := range peersSnapshot() {
+			http.Post("http://"+addr+"/receivePending", "application/json", strings.NewReader(string(req)))
+			log.Printf("[POW][NETWORK] Broadcasted Pending to %s", addr)
 		}
-	} else {
-		log.Printf("[WARRN] There are No entries, Checking Next Mine Signal")
-	}
-	// 채굴여부에 따라 채굴 신호 전파 (채굴종료 직후 남아있는 pending 기반 채굴 요청도 처리 가능)
-	if !isMining.Load() {
+		http.Post("http://"+self+"/receivePending", "application/json", strings.NewReader(string(req)))
+		log.Printf("[PoW][NETWORK] Broadcasted Pending to all peers")
+	} else if !isMining.Load() {
+		// 채굴여부에 따라 채굴 신호 전파 (채굴종료 직후 남아있는 pending 기반 채굴 요청도 처리 가능)
 		log.Printf("[POW][NETWORK] Starting Network Mining Order")
 		isMining.Store(true) // 즉시 채굴 중으로 변경
-		for _, peer := range peersSnapshot() {
-			go func(addr string) {
-				http.Post("http://"+addr+"/mine/start", "application/json", strings.NewReader(string(req)))
-				log.Printf("[POW][NETWORK] Broadcasted Mining signal to %s", addr)
-			}(peer)
+		for _, addr := range peersSnapshot() {
+			http.Post("http://"+addr+"/mine/start", "application/json", strings.NewReader(string(req)))
+			log.Printf("[POW][NETWORK] Broadcasted Mining signal to %s", addr)
 		}
 		http.Post("http://"+self+"/mine/start", "application/json", strings.NewReader(string(req)))
 		log.Printf("[PoW][NETWORK] Broadcasted mining signal to all peers")
@@ -84,8 +75,20 @@ func handleMineStart(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
 	log.Printf("[PoW][NODE] Received mining start signal with entries: %d", len(req.Entries))
-	appendPending(req.Entries)
-	entries := popPending() // pending에 쌓여있던 entries를 불러옴
+	// 채굴 시작 신호에 엔트리가 1건 이상 포함될 때
+	if len(req.Entries) > 0 {
+		appendPending(req.Entries)
+	}
+	// 채굴 시작 신호에 엔트리가 없다면, 채굴 종료 후 즉시 실행된 연쇄 신호임 `
+	// pending에 쌓여있던 entries를 불러옴
+	entries := popPending()
+
+	// 이미 다른 요청에서 mining 시작했거나 pending이 소진된 상태라면
+	if len(entries) == 0 {
+		log.Printf("[PoW][NODE] No entries to mine. Skip.")
+		return
+	}
+
 	log.Printf("[PoW][NODE] Received mining start signal with Pending entries: %d", len(entries))
 	go func(entries []ContentRecord) {
 		// 꺼낸 entries를 활용해 실제 채굴 시작
@@ -177,10 +180,8 @@ func broadcastBlock(res MineResult, entries []ContentRecord) {
 		"elapsed":    res.Elapsed,
 		"winner":     self,
 	})
-	for _, peer := range peersSnapshot() {
-		go func(addr string) {
-			http.Post("http://"+addr+"/receiveBlock", "application/json", strings.NewReader(string(body)))
-		}(peer)
+	for _, addr := range peersSnapshot() {
+		http.Post("http://"+addr+"/receiveBlock", "application/json", strings.NewReader(string(body)))
 	}
 	http.Post("http://"+self+"/receiveBlock", "application/json", strings.NewReader(string(body)))
 	log.Printf("[PoW][P2P][BROADCAST] Winner sent NewBlock to peers: index=%d hash=%s", res.Header.Index, res.BlockHash)

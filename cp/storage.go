@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
 	"strconv"
 	"strings"
 
@@ -95,8 +96,8 @@ func saveBlockToDB(block LowerBlock) error {
 	if err := db.Put([]byte("root_latest"), []byte(block.MerkleRoot), nil); err != nil {
 		return err
 	}
-
 	log.Printf("[DB] Block #%d saved (Hash=%s)\n", block.Index, block.BlockHash)
+	appendBlockLog(block.Index, block.Timestamp)
 	return nil
 }
 
@@ -290,4 +291,21 @@ func selfID() string {
 		return v
 	}
 	return "UNKNOWN_CP"
+}
+
+const blockLogFilePath = "block_history.txt"
+
+func appendBlockLog(idx int, ts string) {
+	f, err := os.OpenFile(blockLogFilePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		log.Printf("[LOG][ERROR] cannot open blockHistory file: %v", err)
+		return
+	}
+	defer f.Close()
+	// txt 파일에 저장할 내용
+	line := fmt.Sprintf("Block #%02d, timestamp : %s \n", idx, ts)
+	if _, err := f.WriteString(line); err != nil {
+		log.Printf("[LOG][ERROR] cannot write blockHistory: %v", err)
+	}
+	log.Printf("[LOG][WRITE] Success to Write BlockHistory: %v", err)
 }

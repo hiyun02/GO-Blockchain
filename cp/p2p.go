@@ -270,7 +270,7 @@ func markAlive(addr string, status bool) {
 // 네트워크 감시 루틴(전체 노드 생존 여부 확인)
 func startNetworkWatcher() {
 	log.Printf("[WATCHER] starting network watcher")
-	t := time.NewTicker(10 * time.Second)
+	t := time.NewTicker(20 * time.Second)
 	defer t.Stop()
 
 	for range t.C {
