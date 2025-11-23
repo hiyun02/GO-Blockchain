@@ -48,7 +48,7 @@ func triggerNetworkMining(entries []ContentRecord) {
 			http.Post("http://"+addr+"/receivePending", "application/json", strings.NewReader(string(req)))
 			log.Printf("[POW][NETWORK] Broadcasted Pending to %s", addr)
 		}
-		http.Post("http://"+self+"/receivePending", "application/json", strings.NewReader(string(req)))
+		appendPending(entries) // 자기 자신은 직접 추가
 		log.Printf("[PoW][NETWORK] Broadcasted Pending to all peers")
 	} else if !isMining.Load() {
 		// 채굴여부에 따라 채굴 신호 전파 (채굴종료 직후 남아있는 pending 기반 채굴 요청도 처리 가능)
@@ -64,6 +64,7 @@ func triggerNetworkMining(entries []ContentRecord) {
 }
 
 // 각 노드에서 채굴 요청 수신 및 채굴 수행
+// POST : /mine/start
 func handleMineStart(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Entries []ContentRecord `json:"entries"`
@@ -228,7 +229,7 @@ func receiveBlock(w http.ResponseWriter, r *http.Request) {
 	// 승자노드는, 다음 채굴이 가능하다면 트리거될 수 있도록 검사
 	if msg.Winner == self && !pendingIsEmpty() {
 		log.Printf("[POW][CHAIN] Winner Node Trigger Next Mining")
-		go triggerNextMining()
+		triggerNextMining()
 	}
 }
 
@@ -247,6 +248,7 @@ func addBlockToChain(header PoWHeader, hash string, elapsed int64, entries []Con
 		Elapsed:    elapsed,
 	}
 	onBlockReceived(block)
+
 }
 
 // 세 블록 마다 채굴 소요시간에 따른 채굴 난이도 조정
