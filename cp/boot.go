@@ -94,10 +94,11 @@ func registerPeer(w http.ResponseWriter, r *http.Request) {
 
 // 노드 상태 구조체, /status API 호출 시 응답받는 JSON 구조
 type nodeStatus struct {
-	Addr   string   `json:"addr"`    // 노드 주소
-	Height int      `json:"height"`  // 블록 높이 (체인 진행 정도)
-	IsBoot bool     `json:"is_boot"` // 부트노드 여부
-	Peers  []string `json:"peers"`   // 연결된 피어 목록
+	Addr     string   `json:"addr"`      // 노드 주소
+	Height   int      `json:"height"`    // 블록 높이 (체인 진행 정도)
+	IsBoot   bool     `json:"is_boot"`   // 부트노드 여부
+	Peers    []string `json:"peers"`     // 연결된 피어 목록
+	LastHash string   `json:"last_hash"` // 최신 블록의 해시
 }
 
 // 다른 노드 상태 조회

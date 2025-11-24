@@ -90,8 +90,8 @@ func addAnchor(w http.ResponseWriter, r *http.Request) {
 		AnchorTimestamp:  time.Unix(req.Ts, 0).Format(time.RFC3339),
 	}
 
-	// pendingAnchors 에 anchor 객체 전체 추가
-	ch.appendAnchorToPending(ar)
+	// pending 에 anchor 객체 전체 추가
+	appendPending([]AnchorRecord{ar})
 
 	log.Printf("[ANCHOR] Pending anchor added: %+v", ar)
 

@@ -5,9 +5,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"log"
+	"math/rand"
 	"net/http"
 	"strings"
-	"sync/atomic"
 	"time"
 )
 
@@ -20,18 +20,12 @@ import (
 // - 동일한 GlobalDifficulty 사용
 ////////////////////////////////////////////////////////////////////////////////
 
-// 전역 난이도 설정 (모든 노드 동일)
-var GlobalDifficulty = 4 // 예: 해시가 "0000"으로 시작해야 성공
-
-// 채굴 중단 플래그 (다른 노드가 성공하면 true)
-var miningStop atomic.Bool
-
 // 채굴 시 해시 계산 대상 최소 정보
 type PoWHeader struct {
 	Index      int    `json:"index"`
 	PrevHash   string `json:"prev_hash"`
 	MerkleRoot string `json:"merkle_root"`
-	Timestamp  int64  `json:"timestamp"`
+	Timestamp  string `json:"timestamp"`
 	Difficulty int    `json:"difficulty"`
 	Nonce      int    `json:"nonce"`
 }
@@ -41,37 +35,42 @@ type MineResult struct {
 	BlockHash string
 	Nonce     int
 	Header    PoWHeader
+	Elapsed   int64
 }
 
-// 헤더 직렬화 후 SHA-256 해시 계산
-func computeHashForPoW(header PoWHeader) string {
-	data, _ := json.Marshal(header)
-	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:])
-}
+// 채굴되지 않은 pending 을 감시해서 채굴 시작 신호 보내는 watcher
+func startMiningWatcher() {
+	t := time.NewTicker(time.Duration(MiningWatcherTime) * time.Second)
+	log.Printf("[WATCHER] Mining Watcher Started")
 
-// 주어진 난이도 조건 검사
-func validHash(hash string, difficulty int) bool {
-	prefix := strings.Repeat("0", difficulty)
-	return strings.HasPrefix(hash, prefix)
-}
+	for range t.C {
 
-// 네트워크 전체 노드에게 채굴 요청 전달
-// OTT 체인에서는 AnchorRecord 목록을 기반으로 채굴 수행
-func triggerNetworkMining(anchors []AnchorRecord) {
-	reqBody, _ := json.Marshal(map[string]any{
-		"anchors": anchors,
-	})
+		// 이미 채굴 중이거나 메모리풀이 비었으면 아무것도 안함
+		if isMining.Load() || pendingIsEmpty() {
+			continue
+		}
 
-	// 노드 주소 목록을 순회하며 채굴 요청 전달
-	for _, peer := range peersSnapshot() {
-		go func(addr string) {
-			http.Post("http://"+addr+"/mine/start", "application/json", strings.NewReader(string(reqBody)))
-			log.Printf("[POW][NETWORK] Broadcasted mining start to %s", addr)
-		}(peer)
+		// 메모리풀에 레코드가 있고 채굴 중이 아니면 채굴 시작 signal
+		records := getPending()
+		log.Printf("[WATCHER] Pending detected => Starting mining (%d anchors)", len(records))
+		sendMiningSignal(records)
 	}
-	http.Post("http://"+self+"/mine/start", "application/json", strings.NewReader(string(reqBody)))
-	log.Printf("[POW][NETWORK] Broadcasted mining start with %d entries", len(anchors))
+}
+
+// 모든 노드에 채굴 요청 전파
+func sendMiningSignal(anchors []AnchorRecord) {
+	req, _ := json.Marshal(map[string]any{"anchors": anchors})
+	log.Printf("[POW][NETWORK] Starting Network Mining Order")
+
+	// peerSnapshot은 자기자신을 포함하지 않으므로 추가
+	nodes := append(peersSnapshot(), self)
+	for _, node := range nodes {
+		go func(addr string) {
+			http.Post("http://"+addr+"/mine/start", "application/json", strings.NewReader(string(req)))
+			log.Printf("[POW][NETWORK] Broadcasted Mining signal to %s", addr)
+		}(node)
+	}
+	log.Printf("[PoW][NETWORK] Broadcasted mining signal to all peers")
 }
 
 // 각 노드에서 채굴 요청 수신 및 채굴 수행
@@ -86,19 +85,30 @@ func handleMineStart(w http.ResponseWriter, r *http.Request) {
 	}
 	defer r.Body.Close()
 
-	log.Printf("[PoW][NODE] Received mining start signal")
+	anchors := req.Anchors
+	if len(anchors) == 0 {
+		log.Printf("[PoW][NODE] No anchors to mine. Skip.")
+		return
+	}
+	// CAS: mining 시작 시점 보호
+	if !isMining.CompareAndSwap(false, true) {
+		log.Printf("[PoW][NODE] Mining already in progress => cancel new mining")
+		return
+	}
 
-	go func() {
-		result := mineBlock(GlobalDifficulty, req.Anchors)
+	log.Printf("[PoW][NODE] Received mining start signal with anchors: %d", len(anchors))
+	go func(anchors []AnchorRecord) {
+		// entries를 활용해 실제 채굴 시작
+		result := mineBlock(GlobalDifficulty, anchors)
 		if result.BlockHash == "" {
 			log.Printf("[POW][NODE] Mining aborted")
 			return
 		}
-		log.Printf("[POW][NODE] ✅ Mined block hash=%s", result.BlockHash[:12])
-		ch.lastBlockTime = time.Now()
-		broadcastBlock(result, req.Anchors)
-	}()
+		log.Printf("[PoW][NODE] ✅ Success New Block Mining #%d hash=%s elapsed=%ds", result.Header.Index, result.BlockHash[:12], result.Elapsed)
+		adjustDifficulty(result.Header.Index, result.Elapsed) // 채굴 난이도 조정
+		broadcastBlock(result, anchors)
 
+	}(anchors)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "mining started"})
 }
@@ -106,17 +116,21 @@ func handleMineStart(w http.ResponseWriter, r *http.Request) {
 // PoW 채굴 수행
 // 항상 현재 로컬 체인 상태 기반으로 시작
 func mineBlock(difficulty int, anchors []AnchorRecord) MineResult {
-	miningStop.Store(false)
 
-	// LevelDB 장부에서 현재 마지막 블록 조회
+	miningStop.Store(false)
+	mineStart := time.Now()
+	// LevelDB 장부에서 마지막 블록 인덱스 조회
 	prevH, ok := getLatestHeight()
-	if !ok {
-		log.Printf("[PoW] No previous block found (genesis only)")
+	if !ok || prevH < 0 {
+		log.Printf("[PoW] ERROR: mineBlock called but genesis should be mined separately.")
+		isMining.Store(false)
 		return MineResult{}
 	}
+
 	prev, err := getBlockByIndex(prevH)
 	if err != nil {
 		log.Printf("[PoW] Failed to load previous block: %v", err)
+		isMining.Store(false)
 		return MineResult{}
 	}
 
@@ -131,110 +145,177 @@ func mineBlock(difficulty int, anchors []AnchorRecord) MineResult {
 		Index:      index,
 		PrevHash:   prevHash,
 		MerkleRoot: mergedRoot,
-		Timestamp:  time.Now().Unix(),
+		Timestamp:  time.Unix(time.Now().Unix(), 0).Format(time.RFC3339),
 		Difficulty: difficulty,
 	}
 
 	log.Printf("[PoW] Starting mining (index=%d prev=%s...)", index, prevHash[:8])
 
 	// Nonce 탐색
-	nonce := 0
+	rand.Seed(time.Now().UnixNano())
+	nonce := rand.Intn(10000)
+
 	var hash string
 
 	for !miningStop.Load() {
 		header.Nonce = nonce
 		hash = computeHashForPoW(header)
+		// 채굴 성공 시
 		if validHash(hash, difficulty) {
-			log.Printf("[PoW] Success index=%d nonce=%d hash=%s", index, nonce, hash)
-			return MineResult{BlockHash: hash, Nonce: nonce, Header: header}
+			mineEnd := time.Now()
+			elapsed := mineEnd.Sub(mineStart)
+			//isMining.Store(false) // nonce 찾기는 끝났지만, 아직 저장되지 않았으므로 플래그 변경하지 않음
+			return MineResult{BlockHash: hash, Nonce: nonce, Header: header, Elapsed: int64(elapsed.Seconds())}
 		}
 		nonce++
 	}
+	log.Printf("[PoW] Stop PoW by Winner Node")
 	return MineResult{} // 다른 노드가 성공 시 중단
 }
 
 // 채굴 성공 시 네트워크로 블록 전파
 func broadcastBlock(res MineResult, anchors []AnchorRecord) {
 	body, _ := json.Marshal(map[string]any{
-		"header":  res.Header,
-		"hash":    res.BlockHash,
-		"entries": anchors,
+		"header":     res.Header,
+		"hash":       res.BlockHash,
+		"entries":    anchors,
+		"difficulty": GlobalDifficulty,
+		"elapsed":    res.Elapsed,
+		"winner":     self,
 	})
-	for _, peer := range peersSnapshot() {
+	// peerSnapshot은 자기자신을 포함하지 않으므로 추가
+	nodes := append(peersSnapshot(), self)
+	for _, node := range nodes {
 		go func(addr string) {
-			http.Post("http://"+addr+"/receive", "application/json", strings.NewReader(string(body)))
-		}(peer)
+			http.Post("http://"+addr+"/receiveBlock", "application/json", strings.NewReader(string(body)))
+		}(node)
 	}
-	http.Post("http://"+self+"/receive", "application/json", strings.NewReader(string(body)))
 	log.Printf("[PoW][P2P][BROADCAST] Winner sent NewBlock to peers: index=%d hash=%s", res.Header.Index, res.BlockHash)
 }
 
 // PoW 수행 중 승자노드로부터 신규 블록 수신하면 검증한 후 체인에 추가함
 // POST : /receive 요청을 통해 트리거
-func receive(w http.ResponseWriter, r *http.Request) {
+func receiveBlock(w http.ResponseWriter, r *http.Request) {
 	var msg struct {
-		Header  PoWHeader      `json:"header"`
-		Hash    string         `json:"hash"`
-		Anchors []AnchorRecord `json:"entries"`
+		Header     PoWHeader      `json:"header"`
+		Hash       string         `json:"hash"`
+		Anchors    []AnchorRecord `json:"entries"`
+		Difficulty int            `json:"difficulty"`
+		Elapsed    int64          `json:"elapsed"`
+		Winner     string         `json:"winner"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&msg); err != nil {
 		http.Error(w, err.Error(), 400)
 		return
 	}
-	defer r.Body.Close()
-
-	// 현재 채굴 즉시 중단
+	// 이미 해당 인덱스의 블록이 존재하면 무시
+	if _, err := getBlockByIndex(msg.Header.Index); err == nil {
+		log.Printf("[PoW][NODE] Block #%d already exists -> ignore duplicate receiveBlock", msg.Header.Index)
+		return
+	}
+	// 들어온 블록이 중복된 블록이 아니라면, pow 즉시 중단
+	// 검증 없이 중단하면, 4번블록 채굴 중 3번블록 들어왔을 때 4번블록 채굴이 멈춤
 	miningStop.Store(true)
-
-	// PoW 유효성 검증
+	log.Printf("[PoW][NODE] The Winner Node is : %s", msg.Winner)
+	// PoW 유효성 검증 (기존 난이도로 검증)
 	if !validHash(msg.Hash, msg.Header.Difficulty) {
 		log.Printf("[PoW][BLOCK] Invalid hash rejected: index=%d", msg.Header.Index)
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
-
 	// 체인에 추가
-	addBlockToChain(msg.Header, msg.Hash, msg.Anchors)
+	addBlockToChain(msg.Header, msg.Hash, msg.Elapsed, msg.Anchors)
 	log.Printf("[PoW][CHAIN] Block accepted: index=%d hash=%s", msg.Header.Index, msg.Hash)
 	w.WriteHeader(http.StatusOK)
+
+	// 채굴된 블록의 난이도와 전달받은 난이도가 같지 않다면 전달받은 난이도를 전역변수에 반영
+	if msg.Difficulty != msg.Header.Difficulty {
+		GlobalDifficulty = msg.Difficulty
+	}
+	isMining.Store(false) // 장부 추가가 끝난 후 isMining 종료처리 => 다음 블록 채굴 가능한 상태가 됨
 }
 
 // 검증된 블록을 로컬 체인에 추가
-func addBlockToChain(header PoWHeader, hash string, anchors []AnchorRecord) {
+func addBlockToChain(header PoWHeader, hash string, elapsed int64, anchors []AnchorRecord) {
 	block := UpperBlock{
 		Index:      header.Index,
 		OttID:      selfID(),
 		PrevHash:   header.PrevHash,
-		Timestamp:  time.Unix(header.Timestamp, 0).Format(time.RFC3339),
+		Timestamp:  header.Timestamp,
 		Records:    anchors,
 		MerkleRoot: header.MerkleRoot,
 		Nonce:      header.Nonce,
 		Difficulty: header.Difficulty,
 		BlockHash:  hash,
+		Elapsed:    elapsed,
 	}
 	onBlockReceived(block)
 }
 
-// 채굴 난이도 조정
-// 호출된 순간: now - lastBlockTime 비교
-// 입력/출력 값 없음,  LowerChain 내부 difficulty만 갱신
-func adjustDifficulty() {
-	now := time.Now()
-	elapsed := now.Sub(ch.lastBlockTime)
+// 세 블록 마다 채굴 소요시간에 따른 채굴 난이도 조정
+func adjustDifficulty(idx int, elapsed int64) {
 
-	if elapsed > BlockInterval {
-		GlobalDifficulty--
-		if GlobalDifficulty < 1 {
-			GlobalDifficulty = 1
+	if idx%3 == 0 {
+		log.Printf("[DIFF] Adjust Difficulty Start! Index = %d", idx)
+		// 3 블록의 소요시간 담을 배열 (0으로 초기화)
+		e := [3]int64{}
+		// 최신블록 채굴소요시간
+		e[2] = elapsed
+		if idx > 2 {
+			// 직전 블록 조회
+			b1, err1 := getBlockByIndex(idx - 1)
+			if err1 != nil {
+				log.Printf("[DIFF] Previous Block fetch error ")
+			} else {
+				e[1] = b1.Elapsed
+			} // 직전블록 채굴소요시간
+			// 그 전 블록 조회
+			b2, err2 := getBlockByIndex(idx - 2)
+			if err2 != nil {
+				log.Printf("[DIFF] PRe-Previous Block fetch error")
+			} else {
+				e[0] = b2.Elapsed
+			} // 직전블록의 전블록 채굴소요시간
 		}
-		log.Printf("[DIFF] Block time= %v > Target ==> Difficulty-- => %d",
-			elapsed, GlobalDifficulty)
-	} else {
-		GlobalDifficulty++
-		log.Printf("[DIFF] Block time= %v < Target ==> Difficulty++ => %d",
-			elapsed, GlobalDifficulty)
-	}
 
-	// 마지막 블록 시간 갱신
-	ch.lastBlockTime = now
+		avg := (float64)(e[0]+e[1]+e[2]) / 3.0
+		ratio := avg / float64(DiffStandardTime)
+
+		log.Printf("[DIFF] 3-block average elapsed = %.2f sec , ratio : %.2f (b0=%d b1=%d b2=%d)",
+			avg, ratio, e[0], e[1], e[2])
+
+		// 너무 일찍 끝났다면 난이도 올림
+		if ratio < 0.85 {
+			GlobalDifficulty++
+			log.Printf("[DIFF] Increased difficulty => %d", GlobalDifficulty)
+			if GlobalDifficulty == 8 {
+				GlobalDifficulty--
+			}
+
+		} else if ratio > 1.25 { // 너무 오래 걸렸다면 난이도 낮춤
+			GlobalDifficulty--
+			if GlobalDifficulty < 1 {
+				GlobalDifficulty = 1
+			}
+			log.Printf("[DIFF] Decreased difficulty => %d", GlobalDifficulty)
+		} else {
+			log.Printf("[DIFF] No difficulty change (within normal range)")
+		}
+
+	} else {
+		log.Printf("[DIFF] Don't Adjust Difficulty! Index = %d", idx)
+	}
+}
+
+// 헤더 직렬화 후 SHA-256 해시 계산
+func computeHashForPoW(header PoWHeader) string {
+	data, _ := json.Marshal(header)
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
+
+// 주어진 난이도 조건 검사
+func validHash(hash string, difficulty int) bool {
+	prefix := strings.Repeat("0", difficulty)
+	return strings.HasPrefix(hash, prefix)
 }

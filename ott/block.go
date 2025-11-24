@@ -1,9 +1,9 @@
 package main
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
+	"log"
+	"strings"
+	"time"
 )
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -26,28 +26,56 @@ type UpperBlock struct {
 	Nonce      int            `json:"nonce"`       // PoW용 Nonce
 	Difficulty int            `json:"difficulty"`  // 난이도
 	BlockHash  string         `json:"block_hash"`  // 블록 전체 해시
+	Elapsed    int64          `json:"elapsed"`     // 채굴 소요 시간
 }
 
-// 제네시스 상수
-const (
-	genesisTimestamp = "1980-01-01T00:00:00Z"                                             // 재현성 보장
-	prevHashZeros    = "0000000000000000000000000000000000000000000000000000000000000000" // 64자리 0
-)
-
 // 제네시스 블록 생성
-func createGenesisBlock(ottID string) UpperBlock {
-	root := sha256Hex([]byte{}) // 빈 MerkleRoot
-	genesis := UpperBlock{
-		Index:      0,
-		OttID:      ottID,
-		PrevHash:   prevHashZeros,
-		Timestamp:  genesisTimestamp,
-		Records:    []AnchorRecord{},
-		MerkleRoot: root,
-		Nonce:      0,
-		Difficulty: 0,
+func mineGenesisBlock(ottID string) UpperBlock {
+	log.Printf("[PoW] Mining genesis block...")
+	mineStart := time.Now()
+	// 제네시스는 엔트리 없음, merkleRoot는 sha256("")
+	merkleRoot := sha256Hex([]byte{})
+	prevHash := strings.Repeat("0", 64)
+	index := 0
+
+	header := PoWHeader{
+		Index:      index,
+		PrevHash:   prevHash,
+		MerkleRoot: merkleRoot,
+		Timestamp:  time.Unix(time.Now().Unix(), 0).Format(time.RFC3339),
+		Difficulty: GlobalDifficulty,
 	}
-	genesis.BlockHash = genesis.computeHash()
+
+	// === 제네시스 Nonce 탐색 ===
+	nonce := 0
+	var hash string
+
+	for {
+		header.Nonce = nonce
+		hash = computeHashForPoW(header)
+		if validHash(hash, GlobalDifficulty) {
+			log.Printf("[PoW] GENESIS mined: nonce=%d hash=%s", nonce, hash)
+			break
+		}
+		nonce++
+	}
+	mineEnd := time.Now()
+	elapsed := int64(mineEnd.Sub(mineStart).Seconds())
+	// === UpperBlock으로 변환 ===
+	genesis := UpperBlock{
+		Index:      index,
+		OttID:      ottID,
+		PrevHash:   prevHash,
+		Timestamp:  header.Timestamp,
+		Records:    []AnchorRecord{}, // Genesis는 Records 없음
+		MerkleRoot: merkleRoot,
+		Nonce:      header.Nonce,
+		Difficulty: GlobalDifficulty,
+		BlockHash:  hash,
+		Elapsed:    elapsed,
+	}
+	// 난이도 조정 수행
+	adjustDifficulty(0, elapsed)
 	return genesis
 }
 
@@ -73,8 +101,5 @@ func (b UpperBlock) computeHash() string {
 		Nonce:      b.Nonce,
 		Difficulty: b.Difficulty,
 	}
-
-	data, _ := json.Marshal(hdr)
-	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:])
+	return sha256Hex(jsonCanonical(hdr))
 }

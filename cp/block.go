@@ -44,7 +44,7 @@ func mineGenesisBlock(cpID string) LowerBlock {
 		Index:      index,
 		PrevHash:   prevHash,
 		MerkleRoot: merkleRoot,
-		Timestamp:  time.Now().Unix(),
+		Timestamp:  time.Unix(time.Now().Unix(), 0).Format(time.RFC3339),
 		Difficulty: GlobalDifficulty,
 	}
 
@@ -68,7 +68,7 @@ func mineGenesisBlock(cpID string) LowerBlock {
 		Index:      index,
 		CpID:       cpID,
 		PrevHash:   prevHash,
-		Timestamp:  time.Unix(header.Timestamp, 0).Format(time.RFC3339),
+		Timestamp:  header.Timestamp,
 		Entries:    []ContentRecord{}, // Genesis는 Entry 없음
 		MerkleRoot: merkleRoot,
 		Nonce:      header.Nonce,

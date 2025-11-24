@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"log"
+	"math/rand"
 	"net/http"
 	"strings"
 	"time"
@@ -24,7 +25,7 @@ type PoWHeader struct {
 	Index      int    `json:"index"`
 	PrevHash   string `json:"prev_hash"`
 	MerkleRoot string `json:"merkle_root"`
-	Timestamp  int64  `json:"timestamp"`
+	Timestamp  string `json:"timestamp"`
 	Difficulty int    `json:"difficulty"`
 	Nonce      int    `json:"nonce"`
 }
@@ -37,11 +38,23 @@ type MineResult struct {
 	Elapsed   int64
 }
 
-// /mine 요청이 들어왔을 때
-func triggerNetworkMining(entries []ContentRecord) {
-	log.Printf("[POW] Already Mining => add %d entries to Pending", len(entries))
-	// 자기 자신에게만 추가
-	appendPending(entries)
+// 채굴되지 않은 pending 을 감시해서 채굴 시작 신호 보내는 watcher
+func startMiningWatcher() {
+	t := time.NewTicker(time.Duration(MiningWatcherTime) * time.Second)
+	log.Printf("[WATCHER] Mining Watcher Started")
+
+	for range t.C {
+
+		// 이미 채굴 중이거나 메모리풀이 비었으면 아무것도 안함
+		if isMining.Load() || pendingIsEmpty() {
+			continue
+		}
+
+		// 메모리풀에 레코드가 있고 채굴 중이 아니면 채굴 시작 signal
+		entries := getPending()
+		log.Printf("[WATCHER] Pending detected => Starting mining (%d entries)", len(entries))
+		sendMiningSignal(entries)
+	}
 }
 
 // 모든 노드에 채굴 요청 전파
@@ -49,11 +62,14 @@ func sendMiningSignal(entries []ContentRecord) {
 	req, _ := json.Marshal(map[string]any{"entries": entries})
 	log.Printf("[POW][NETWORK] Starting Network Mining Order")
 
-	for _, addr := range peersSnapshot() {
-		http.Post("http://"+addr+"/mine/start", "application/json", strings.NewReader(string(req)))
-		log.Printf("[POW][NETWORK] Broadcasted Mining signal to %s", addr)
+	// peerSnapshot은 자기자신을 포함하지 않으므로 추가
+	nodes := append(peersSnapshot(), self)
+	for _, node := range nodes {
+		go func(addr string) {
+			http.Post("http://"+addr+"/mine/start", "application/json", strings.NewReader(string(req)))
+			log.Printf("[POW][NETWORK] Broadcasted Mining signal to %s", addr)
+		}(node)
 	}
-	http.Post("http://"+self+"/mine/start", "application/json", strings.NewReader(string(req)))
 	log.Printf("[PoW][NETWORK] Broadcasted mining signal to all peers")
 }
 
@@ -103,7 +119,6 @@ func handleMineStart(w http.ResponseWriter, r *http.Request) {
 func mineBlock(difficulty int, entries []ContentRecord) MineResult {
 
 	miningStop.Store(false)
-	isMining.Store(true)
 	mineStart := time.Now()
 	// LevelDB 장부에서 마지막 블록 인덱스 조회
 	prevH, ok := getLatestHeight()
@@ -134,14 +149,16 @@ func mineBlock(difficulty int, entries []ContentRecord) MineResult {
 		Index:      index,
 		PrevHash:   prevHash,
 		MerkleRoot: merkleRoot,
-		Timestamp:  time.Now().Unix(),
+		Timestamp:  time.Unix(time.Now().Unix(), 0).Format(time.RFC3339),
 		Difficulty: difficulty,
 	}
 
 	log.Printf("[PoW] Starting mining (index=%d prev=%s...)", index, prevHash[:8])
 
 	// Nonce 탐색
-	nonce := 0
+	rand.Seed(time.Now().UnixNano())
+	nonce := rand.Intn(10000)
+
 	var hash string
 
 	for !miningStop.Load() {
@@ -151,7 +168,7 @@ func mineBlock(difficulty int, entries []ContentRecord) MineResult {
 		if validHash(hash, difficulty) {
 			mineEnd := time.Now()
 			elapsed := mineEnd.Sub(mineStart)
-			isMining.Store(false) // 채굴 종료 처리
+			//isMining.Store(false) // nonce 찾기는 끝났지만, 아직 저장되지 않았으므로 플래그 변경하지 않음
 			return MineResult{BlockHash: hash, Nonce: nonce, Header: header, Elapsed: int64(elapsed.Seconds())}
 		}
 		nonce++
@@ -170,10 +187,13 @@ func broadcastBlock(res MineResult, entries []ContentRecord) {
 		"elapsed":    res.Elapsed,
 		"winner":     self,
 	})
-	for _, addr := range peersSnapshot() {
-		http.Post("http://"+addr+"/receiveBlock", "application/json", strings.NewReader(string(body)))
+	// peerSnapshot은 자기자신을 포함하지 않으므로 추가
+	nodes := append(peersSnapshot(), self)
+	for _, node := range nodes {
+		go func(addr string) {
+			http.Post("http://"+addr+"/receiveBlock", "application/json", strings.NewReader(string(body)))
+		}(node)
 	}
-	http.Post("http://"+self+"/receiveBlock", "application/json", strings.NewReader(string(body)))
 	log.Printf("[PoW][P2P][BROADCAST] Winner sent NewBlock to peers: index=%d hash=%s", res.Header.Index, res.BlockHash)
 }
 
@@ -194,14 +214,14 @@ func receiveBlock(w http.ResponseWriter, r *http.Request) {
 	}
 	defer r.Body.Close()
 
-	// 현재 pow 즉시 중단
-	miningStop.Store(true)
 	// 이미 해당 인덱스의 블록이 존재하면 무시
 	if _, err := getBlockByIndex(msg.Header.Index); err == nil {
 		log.Printf("[PoW][NODE] Block #%d already exists -> ignore duplicate receiveBlock", msg.Header.Index)
 		return
 	}
-
+	// 들어온 블록이 중복된 블록이 아니라면, pow 즉시 중단
+	// 검증 없이 중단하면, 4번블록 채굴 중 3번블록 들어왔을 때 4번블록 채굴이 멈춤
+	miningStop.Store(true)
 	log.Printf("[PoW][NODE] The Winner Node is : %s", msg.Winner)
 	// PoW 유효성 검증 (기존 난이도로 검증)
 	if !validHash(msg.Hash, msg.Header.Difficulty) {
@@ -219,6 +239,7 @@ func receiveBlock(w http.ResponseWriter, r *http.Request) {
 	if msg.Difficulty != msg.Header.Difficulty {
 		GlobalDifficulty = msg.Difficulty
 	}
+	isMining.Store(false) // 장부 추가가 끝난 후 isMining 종료처리 => 다음 블록 채굴 가능한 상태가 됨
 }
 
 // 검증된 블록을 로컬 체인에 추가
@@ -227,7 +248,7 @@ func addBlockToChain(header PoWHeader, hash string, elapsed int64, entries []Con
 		Index:      header.Index,
 		CpID:       selfID(),
 		PrevHash:   header.PrevHash,
-		Timestamp:  time.Unix(header.Timestamp, 0).Format(time.RFC3339),
+		Timestamp:  header.Timestamp,
 		Entries:    entries,
 		MerkleRoot: header.MerkleRoot,
 		Nonce:      header.Nonce,
@@ -236,7 +257,6 @@ func addBlockToChain(header PoWHeader, hash string, elapsed int64, entries []Con
 		Elapsed:    elapsed,
 	}
 	onBlockReceived(block)
-	isMining.Store(false) // 장부에까지 추가가 끝난 후 isMining 종료처리
 }
 
 // 세 블록 마다 채굴 소요시간에 따른 채굴 난이도 조정
@@ -266,7 +286,7 @@ func adjustDifficulty(idx int, elapsed int64) {
 		}
 
 		avg := (float64)(e[0]+e[1]+e[2]) / 3.0
-		ratio := avg / float64(TargetBlockTime)
+		ratio := avg / float64(DiffStandardTime)
 
 		log.Printf("[DIFF] 3-block average elapsed = %.2f sec , ratio : %.2f (b0=%d b1=%d b2=%d)",
 			avg, ratio, e[0], e[1], e[2])
@@ -291,28 +311,6 @@ func adjustDifficulty(idx int, elapsed int64) {
 
 	} else {
 		log.Printf("[DIFF] Don't Adjust Difficulty! Index = %d", idx)
-	}
-}
-
-// 채굴되지 않은 pending 을 감시해서 채굴 시작 신호 보내는 watcher
-func startMiningWatcher() {
-	t := time.NewTicker(10 * time.Second)
-	log.Printf("[WATCHER] Mining Watcher Started")
-
-	for range t.C {
-
-		// 이미 채굴 중이거나 펜딩이 비었으면 아무것도 안함
-		if isMining.Load() || pendingIsEmpty() {
-			continue
-		}
-
-		// 펜딩 있음 + 채굴 중 아님 => 펜딩 pop 후 채굴 시작 signal
-		entries := popPending()
-		if len(entries) == 0 {
-			continue
-		}
-		log.Printf("[WATCHER] Pending detected => Starting mining (%d entries)", len(entries))
-		sendMiningSignal(entries)
 	}
 }
 

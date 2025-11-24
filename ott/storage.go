@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
 	"strconv"
 	"strings"
 
@@ -97,6 +98,7 @@ func saveBlockToDB(block UpperBlock) error {
 	}
 
 	log.Printf("[DB] Block #%d saved (Hash=%s)\n", block.Index, block.BlockHash)
+	appendBlockLog(block)
 	return nil
 }
 
@@ -231,8 +233,53 @@ func listBlocksPaginated(offset, limit int) ([]UpperBlock, int, error) {
 
 // 현재 노드의 CP 식별자 반환 (메타데이터에서 읽기)
 func selfID() string {
-	if v, ok := getMeta("meta_cp_id"); ok {
+	if v, ok := getMeta("meta_ott_id"); ok {
 		return v
 	}
-	return "UNKNOWN_CP"
+	return "UNKNOWN_OTT"
+}
+
+func appendBlockLog(block UpperBlock) {
+	f, err := os.OpenFile("block_history.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		log.Printf("[LOG][ERROR] cannot open blockHistory file: %v", err)
+		return
+	}
+	defer f.Close()
+	// txt 파일에 저장할 내용
+	line := fmt.Sprintf("Block #%02d, Entries : %d, Timestamp : %s \n", block.Index, len(block.Records), block.Timestamp)
+	if _, err := f.WriteString(line); err != nil {
+		log.Printf("[LOG][ERROR] cannot write blockHistory: %v", err)
+	}
+	log.Printf("[LOG][WRITE] Success to Write BlockHistory: %v", err)
+}
+
+// 로컬 체인을 완전히 초기화하고 제네시스 블록만 재생성
+func resetLocalDB() error {
+	chainMu.Lock()
+	defer chainMu.Unlock()
+
+	log.Printf("[CHAIN] Local chain RESET in progress...")
+
+	// LevelDB 전체 삭제
+	iter := db.NewIterator(nil, nil)
+	for iter.Next() {
+		key := iter.Key()
+		if err := db.Delete(key, nil); err != nil {
+			iter.Release()
+			return fmt.Errorf("failed to delete key %s: %v", string(key), err)
+		}
+	}
+	iter.Release()
+	if err := iter.Error(); err != nil {
+		return fmt.Errorf("iterator error during db clear: %v", err)
+	}
+
+	// 로컬 height 초기화
+	if err := setLatestHeight(-1); err != nil {
+		return fmt.Errorf("failed to reset height: %v", err)
+	}
+
+	log.Printf("[CHAIN] Local chain RESET complete ")
+	return nil
 }

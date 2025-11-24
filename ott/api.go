@@ -4,7 +4,10 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
+	"log"
 	"net/http"
+	"net/url"
 	"strconv"
 	"time"
 )
@@ -82,17 +85,28 @@ func RegisterAPI(mux *http.ServeMux, chain *UpperChain) {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
-			"total":  total,
-			"offset": offset,
-			"limit":  limit,
-			"items":  blocks,
+			"total":      total,
+			"offset":     offset,
+			"limit":      limit,
+			"items":      blocks,
+			"difficulty": GlobalDifficulty,
 		})
 	})
 
 	// 노드 상태 확인
 	// GET /status : 헬스/높이/주소 리턴 (부트노드 선정에 사용)
 	mux.HandleFunc("/status", func(w http.ResponseWriter, r *http.Request) {
+		chainMu.Lock()
 		h, _ := getLatestHeight()
+		lastHash := ""
+		ub, err := getBlockByIndex(h)
+		if err != nil {
+			log.Printf("[P2P] Block Hash Not Found")
+		} else {
+			lastHash = ub.BlockHash
+		}
+		chainMu.Unlock()
+
 		writeJSON(w, http.StatusOK, map[string]any{
 			"addr":       self,
 			"height":     h,
@@ -100,7 +114,9 @@ func RegisterAPI(mux *http.ServeMux, chain *UpperChain) {
 			"bootAddr":   boot,
 			"started_at": startedAt.Format(time.RFC3339),
 			"peers":      peersSnapshot(),
+			"difficulty": GlobalDifficulty,
 			"cp_boot":    cpBootMap,
+			"last_hash":  lastHash,
 		})
 	})
 
@@ -111,4 +127,60 @@ func RegisterAPI(mux *http.ServeMux, chain *UpperChain) {
 		_ = json.NewEncoder(w).Encode(peersSnapshot()) // 비어있어도 "[]" 반환
 	})
 
+	// CP 체인에게 검색 요청을 중계하는 API
+	// GET /cpSearch?cp_id=<id>&keyword=<keyword>
+	mux.HandleFunc("/cpSearch", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		// --- 입력 파라미터 추출 ---
+		cpID := r.URL.Query().Get("cp_id")
+		kw := r.URL.Query().Get("keyword")
+
+		if cpID == "" || kw == "" {
+			http.Error(w, "cp_id and keyword required", http.StatusBadRequest)
+			return
+		}
+
+		// --- CP 부트노드 주소 조회 ---
+		cpBootMapMu.RLock()
+		cpAddr, ok := cpBootMap[cpID]
+		cpBootMapMu.RUnlock()
+
+		if !ok || cpAddr == "" {
+			http.Error(w, "unknown cp_id or cp boot address missing", http.StatusNotFound)
+			return
+		}
+
+		// --- CP 체인 /search 요청 URL ---
+		targetURL := fmt.Sprintf("http://%s/search?value=%s", cpAddr, url.QueryEscape(kw))
+
+		// --- CP 부트노드로 HTTP 요청 보내기 ---
+		resp, err := http.Get(targetURL)
+		if err != nil {
+			http.Error(w, "failed to reach CP node: "+err.Error(), http.StatusBadGateway)
+			return
+		}
+		defer resp.Body.Close()
+
+		// CP가 에러코드를 그대로 보낼 수 있으므로 반영
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			http.Error(w, fmt.Sprintf("cp error: %s", string(body)), resp.StatusCode)
+			return
+		}
+
+		// --- 결과를 그대로 OTT에서 클라이언트에게 전달 ---
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			http.Error(w, "failed reading cp response", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write(body)
+	})
 }

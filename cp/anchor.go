@@ -74,7 +74,7 @@ func submitAnchor(block LowerBlock) {
 	ensureKeyPair() // 키 없으면 생성
 	privPem, _ := getMeta("meta_cp_privkey")
 
-	ts := time.Now().Unix()
+	ts := time.Unix(time.Now().Unix(), 0).Format(time.RFC3339)
 	sig := makeAnchorSignature(privPem, block.MerkleRoot, ts)
 
 	req := map[string]any{

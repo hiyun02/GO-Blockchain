@@ -14,7 +14,6 @@ import (
 // LowerChain (CP별 독립 하부체인, PoW 기반 분산 합의)
 // ----------------------------------------------------------------------------
 // - PoW 연산은 pow.go의 mineBlock() 호출
-// - 확정형(PBFT) 관련 pending 로직 제거
 ////////////////////////////////////////////////////////////////////////////////
 
 type LowerChain struct {
@@ -27,18 +26,21 @@ type LowerChain struct {
 
 // 전역 상태 관리 변수
 var (
-	ch               *LowerChain  // 현재 체인 포인터
-	self             string       // 현재 노드 주소 NODE_ADDR (예: "cp-node-01:5000")
-	boot             string       // 현재 네트워크 상의 부트노드 주소
-	startedAt        = time.Now() // 현재 노드 시작 시간
-	isBoot           atomic.Bool  // 현재 노드가 부트노드인지 여부
-	bootAddrMu       sync.RWMutex // 부트노드 주소 접근 시 동시성 보호용 RW 잠금 객체
-	ottBoot          string       // ott 체인의 부트노드 주소 (예 : "ott-node-01:5000")
-	ottBootMu        sync.RWMutex // ottBoot 접근 시 동시성 보호용 RW 잠금 객체
-	GlobalDifficulty = 4          // 전역 난이도 설정 (모든 노드 동일)
-	isMining         atomic.Bool  // 내부적인 채굴 상태 플래그
-	miningStop       atomic.Bool  // 다른 노드에게 영향받는 채굴 중단 플래그 (다른 노드가 성공하면 true)
-	TargetBlockTime  = 20         // 채굴 기준시간(20초)
+	ch                 *LowerChain  // 현재 체인 포인터
+	self               string       // 현재 노드 주소 NODE_ADDR (예: "cp-node-01:5000")
+	boot               string       // 현재 네트워크 상의 부트노드 주소
+	startedAt          = time.Now() // 현재 노드 시작 시간
+	isBoot             atomic.Bool  // 현재 노드가 부트노드인지 여부
+	bootAddrMu         sync.RWMutex // 부트노드 주소 접근 시 동시성 보호용 RW 잠금 객체
+	ottBoot            string       // ott 체인의 부트노드 주소 (예 : "ott-node-01:5000")
+	ottBootMu          sync.RWMutex // ottBoot 접근 시 동시성 보호용 RW 잠금 객체
+	GlobalDifficulty   = 4          // 전역 난이도 설정 (모든 노드 동일)
+	isMining           atomic.Bool  // 내부적인 채굴 상태 플래그
+	miningStop         atomic.Bool  // 다른 노드에게 영향받는 채굴 중단 플래그 (다른 노드가 성공하면 true)
+	DiffStandardTime   = 20         // 난이도 조정 기준 시간(20초)
+	MiningWatcherTime  = 30         // 채굴 기준시간(30초)
+	NetworkWatcherTime = 60         // 노드 관리 기준시간(60초)
+	ChainWatcherTime   = 300        // 체인 관리 기준시간(300초)
 )
 
 // 체인 초기화 및 제네시스 확인
@@ -159,6 +161,7 @@ func onBlockReceived(lb LowerBlock) error {
 	return nil
 }
 
+// 체인의 메모리풀인 pending에 컨텐츠 내용 추가
 func appendPending(entries []ContentRecord) {
 	ch.pendingMu.Lock()
 	ch.pending = append(ch.pending, entries...)
@@ -166,7 +169,8 @@ func appendPending(entries []ContentRecord) {
 	log.Printf("[CHAIN][PENDING] Append pending entries (%d items)", len(entries))
 }
 
-func popPending() []ContentRecord {
+// 체인의 메모리풀인 pending에 컨텐츠 내용 비우고 가져오기
+func getPending() []ContentRecord {
 	ch.pendingMu.Lock()
 	defer ch.pendingMu.Unlock()
 	// 복사본 생성
@@ -178,6 +182,7 @@ func popPending() []ContentRecord {
 	return entries
 }
 
+// 메모리풀이 비어있는 지 확인
 func pendingIsEmpty() bool {
 	ch.pendingMu.Lock()
 	defer ch.pendingMu.Unlock()

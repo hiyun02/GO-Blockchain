@@ -40,7 +40,6 @@ func main() {
 	// 노드 간 통신 엔드포인트 등록
 	//     - /addPeer : 기존 노드들이 신규 노드를 추가
 	//	   - /mine/start : 노드 간 채굴 요청 전파
-	//     - /receivePending : 다른 노드가 보낸 컨텐츠 내용 수신
 	//     - /receiveBlock : 다른 노드가 보낸 확정 블록 수신
 	//	   - /register : 부트노드 연결 및 네트워크 연결
 	//	   - /bootNotify : 부트노드 변경 수신
@@ -49,7 +48,6 @@ func main() {
 	//	   - /ottBootNotify : CP 부트노드로부터 전파된 OTT 부트노드 주소 수신
 	mux.HandleFunc("/addPeer", addPeer)
 	mux.HandleFunc("/mine/start", handleMineStart)
-	mux.HandleFunc("/receivePending", receivePending)
 	mux.HandleFunc("/receiveBlock", receiveBlock)
 	mux.HandleFunc("/register", registerPeer)
 	mux.HandleFunc("/bootNotify", bootNotify)
@@ -62,7 +60,7 @@ func main() {
 	// 5) 앵커 서명을 위한 key pair 생성
 	ensureKeyPair()
 
-	// 6) 서버 시작 (고루틴으로 실행해 메인 Go 루틴이 계속 진행되도록)
+	// 6) 서버 시작 (REST 요청 수신 가능한 상태로 돌입)
 	go func() {
 		log.Println("[START] NODE Running on", addr)
 		if err := http.ListenAndServe(addr, mux); err != nil {
@@ -114,20 +112,17 @@ func main() {
 		isBoot.Store(true)
 	}
 
-	// 8) 네트워크 감시 루틴 실행
-	// 네트워크 내 모든 노드를 주기적으로 검사하고,
-	// 응답이 없는 노드를 제거하며, 만약 부트노드가 죽은 경우 새로 선출하는 감시 루프
+	// 8) 네트워크, 채굴, 체인 감시 루틴 실행
 	go func() {
-		log.Println("[WATCHER] starting unified network watcher (10s interval)")
+		log.Printf("[WATCHER] starting unified network watcher (%ds interval)", NetworkWatcherTime)
 		startNetworkWatcher()
-	}()
-	// 9) 채굴 watcher 실행
-	go func() {
-		log.Println("[WATCHER] starting unified mining watcher (05s interval)")
+		log.Printf("[WATCHER] starting unified mining watcher (%ds interval)", MiningWatcherTime)
 		startMiningWatcher()
+		log.Printf("[WATCHER] starting unified chain watcher (%ds interval)", ChainWatcherTime)
+		startChainWatcher()
 	}()
 
-	// 10) 메인 Go 루틴 유지
+	// 9) 메인 Go 루틴 유지
 	select {}
 }
 

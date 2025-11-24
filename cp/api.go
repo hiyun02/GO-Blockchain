@@ -76,24 +76,27 @@ func RegisterAPI(mux *http.ServeMux, chain *LowerChain) {
 		writeJSON(w, http.StatusOK, blk)
 	})
 
-	// 키워드로 블록 검색(정확 일치: cid/fp/info_title)
+	// 키워드로 레코드 검색(정확 일치: cid/fp/info_title)
 	// GET /search?value=<keyword>
 	mux.HandleFunc("/search", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
+
 		kw := r.URL.Query().Get("value")
 		if kw == "" {
 			http.Error(w, "value parameter required", http.StatusBadRequest)
 			return
 		}
-		blk, err := getBlockByContent(kw)
+
+		result, err := searchInsideBlock(kw)
 		if err != nil {
-			http.Error(w, "block not found", http.StatusNotFound)
+			http.Error(w, "record not found", http.StatusNotFound)
 			return
 		}
-		writeJSON(w, http.StatusOK, blk)
+
+		writeJSON(w, http.StatusOK, result)
 	})
 
 	// 전체 장부 조회 (페이지네이션)
@@ -149,7 +152,17 @@ func RegisterAPI(mux *http.ServeMux, chain *LowerChain) {
 	// 노드 상태 확인
 	// GET /status : 헬스/높이/주소 리턴 (부트노드 선정에 사용)
 	mux.HandleFunc("/status", func(w http.ResponseWriter, r *http.Request) {
+		chainMu.Lock()
 		h, _ := getLatestHeight()
+		lastHash := ""
+		lb, err := getBlockByIndex(h)
+		if err != nil {
+			log.Printf("[P2P] Block Hash Not Found")
+		} else {
+			lastHash = lb.BlockHash
+		}
+		chainMu.Unlock()
+
 		writeJSON(w, http.StatusOK, map[string]any{
 			"addr":       self,
 			"height":     h,
@@ -159,6 +172,7 @@ func RegisterAPI(mux *http.ServeMux, chain *LowerChain) {
 			"peers":      peersSnapshot(),
 			"difficulty": GlobalDifficulty,
 			"ott_boot":   getOttBoot(),
+			"last_hash":  lastHash,
 		})
 	})
 
@@ -169,7 +183,8 @@ func RegisterAPI(mux *http.ServeMux, chain *LowerChain) {
 		_ = json.NewEncoder(w).Encode(peersSnapshot()) // 비어있어도 "[]" 반환
 	})
 
-	// 최초 채굴 요청을 받아 모든 노드에 채굴을 시작시키는 트리거
+	// 채굴 요청을 받아 메모리풀에 저장시킴
+	// POST /mine
 	mux.HandleFunc("/mine", func(w http.ResponseWriter, r *http.Request) {
 		var rec []ContentRecord
 		if err := json.NewDecoder(r.Body).Decode(&rec); err != nil {
@@ -178,9 +193,7 @@ func RegisterAPI(mux *http.ServeMux, chain *LowerChain) {
 		}
 		defer r.Body.Close()
 
-		log.Printf("[API][MINE] Mining trigger received with content: %d", len(rec))
-
-		go triggerNetworkMining(rec) // 데이터 전달
+		appendPending(rec) // 데이터 저장
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
