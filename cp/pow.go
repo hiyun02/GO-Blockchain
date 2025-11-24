@@ -156,7 +156,6 @@ func mineBlock(difficulty int, entries []ContentRecord) MineResult {
 		}
 		nonce++
 	}
-	isMining.Store(false) // 채굴 종료 처리
 	log.Printf("[PoW] Stop PoW by Winner Node")
 	return MineResult{} // 다른 노드가 성공 시 중단
 }
@@ -195,9 +194,14 @@ func receiveBlock(w http.ResponseWriter, r *http.Request) {
 	}
 	defer r.Body.Close()
 
-	// 현재 채굴 즉시 중단
+	// 현재 pow 즉시 중단
 	miningStop.Store(true)
-	isMining.Store(false)
+	// 이미 해당 인덱스의 블록이 존재하면 무시
+	if _, err := getBlockByIndex(msg.Header.Index); err == nil {
+		log.Printf("[PoW][NODE] Block #%d already exists -> ignore duplicate receiveBlock", msg.Header.Index)
+		return
+	}
+
 	log.Printf("[PoW][NODE] The Winner Node is : %s", msg.Winner)
 	// PoW 유효성 검증 (기존 난이도로 검증)
 	if !validHash(msg.Hash, msg.Header.Difficulty) {
@@ -232,7 +236,7 @@ func addBlockToChain(header PoWHeader, hash string, elapsed int64, entries []Con
 		Elapsed:    elapsed,
 	}
 	onBlockReceived(block)
-
+	isMining.Store(false) // 장부에까지 추가가 끝난 후 isMining 종료처리
 }
 
 // 세 블록 마다 채굴 소요시간에 따른 채굴 난이도 조정
@@ -292,7 +296,7 @@ func adjustDifficulty(idx int, elapsed int64) {
 
 // 채굴되지 않은 pending 을 감시해서 채굴 시작 신호 보내는 watcher
 func startMiningWatcher() {
-	t := time.NewTicker(5 * time.Second)
+	t := time.NewTicker(10 * time.Second)
 	log.Printf("[WATCHER] Mining Watcher Started")
 
 	for range t.C {
