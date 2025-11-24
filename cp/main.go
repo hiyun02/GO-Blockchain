@@ -121,8 +121,13 @@ func main() {
 		log.Println("[WATCHER] starting unified network watcher (10s interval)")
 		startNetworkWatcher()
 	}()
+	// 9) 채굴 watcher 실행
+	go func() {
+		log.Println("[WATCHER] starting unified mining watcher (05s interval)")
+		startMiningWatcher()
+	}()
 
-	// 9) 메인 Go 루틴 유지
+	// 10) 메인 Go 루틴 유지
 	select {}
 }
 
