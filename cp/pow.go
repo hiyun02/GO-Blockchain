@@ -53,7 +53,12 @@ func triggerNetworkMining(entries []ContentRecord) {
 	} else if !isMining.Load() {
 		// 채굴여부에 따라 채굴 신호 전파 (채굴종료 직후 남아있는 pending 기반 채굴 요청도 처리 가능)
 		log.Printf("[POW][NETWORK] Starting Network Mining Order")
-		isMining.Store(true) // 즉시 채굴 중으로 변경
+		//isMining.Store(true) // 즉시 채굴 중으로 변경
+		// CAS: mining 시작 시점 보호
+		if !isMining.CompareAndSwap(false, true) {
+			log.Printf("[PoW][NODE] Mining already in progress => cancel new mining")
+			return
+		}
 		for _, addr := range peersSnapshot() {
 			http.Post("http://"+addr+"/mine/start", "application/json", strings.NewReader(string(req)))
 			log.Printf("[POW][NETWORK] Broadcasted Mining signal to %s", addr)
@@ -80,18 +85,13 @@ func handleMineStart(w http.ResponseWriter, r *http.Request) {
 	if len(req.Entries) > 0 {
 		appendPending(req.Entries)
 	}
-	// CAS: mining 시작 시점 보호
-	if !isMining.CompareAndSwap(false, true) {
-		log.Printf("[PoW][NODE] Mining already in progress => cancel new mining")
-		return
-	}
 	// 채굴 시작 신호에 엔트리가 없다면, 채굴 종료 후 즉시 실행된 연쇄 신호임 `
 	// pending에 쌓여있던 entries를 불러옴
 	entries := popPending()
 	// 이미 다른 요청에서 mining 시작했거나 pending이 소진된 상태라면
 	if len(entries) == 0 {
 		log.Printf("[PoW][NODE] No entries to mine. Skip.")
-		isMining.Store(true)
+		isMining.Store(false)
 		return
 	}
 
