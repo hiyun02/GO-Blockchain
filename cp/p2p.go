@@ -274,7 +274,7 @@ func startNetworkWatcher() {
 	defer t.Stop()
 
 	for range t.C {
-		log.Printf("[WATCHER] Conduct the Watcher's inspection")
+		//log.Printf("[WATCHER] Conduct the Watcher's inspection")
 		currentBoot := getBootAddr()
 		if currentBoot == "" {
 			continue

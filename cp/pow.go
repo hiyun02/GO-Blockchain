@@ -80,13 +80,18 @@ func handleMineStart(w http.ResponseWriter, r *http.Request) {
 	if len(req.Entries) > 0 {
 		appendPending(req.Entries)
 	}
+	// CAS: mining 시작 시점 보호
+	if !isMining.CompareAndSwap(false, true) {
+		log.Printf("[PoW][NODE] Mining already in progress => cancel new mining")
+		return
+	}
 	// 채굴 시작 신호에 엔트리가 없다면, 채굴 종료 후 즉시 실행된 연쇄 신호임 `
 	// pending에 쌓여있던 entries를 불러옴
 	entries := popPending()
-
 	// 이미 다른 요청에서 mining 시작했거나 pending이 소진된 상태라면
 	if len(entries) == 0 {
 		log.Printf("[PoW][NODE] No entries to mine. Skip.")
+		isMining.Store(true)
 		return
 	}
 
@@ -227,8 +232,8 @@ func receiveBlock(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 승자노드는, 다음 채굴이 가능하다면 트리거될 수 있도록 검사
-	if msg.Winner == self && !pendingIsEmpty() {
-		log.Printf("[POW][CHAIN] Winner Node Trigger Next Mining")
+	if msg.Winner == self && !pendingIsEmpty() && !isMining.Load() {
+		log.Printf("=================Winner Node Trigger Next Mining=================")
 		triggerNextMining()
 	}
 }
