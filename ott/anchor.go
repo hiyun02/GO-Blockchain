@@ -12,7 +12,6 @@ import (
 	"log"
 	"math/big"
 	"net/http"
-	"time"
 )
 
 // OTT에서 CP가 제출한 앵커를 수신하고 검증한 후 pending 추가함수 호출(부트노드만 수행)
@@ -21,7 +20,7 @@ func addAnchor(w http.ResponseWriter, r *http.Request) {
 		CpID   string `json:"cp_id"`
 		CpBoot string `json:"cp_boot"`
 		Root   string `json:"root"`
-		Ts     int64  `json:"ts"`
+		Ts     string `json:"ts"`
 		Sig    string `json:"sig"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -87,7 +86,7 @@ func addAnchor(w http.ResponseWriter, r *http.Request) {
 		ContractSnapshot: ContractData{}, // 빈 계약 정보
 		LowerRoot:        req.Root,
 		AccessCatalog:    []string{}, // 비어있는 접근 리스트
-		AnchorTimestamp:  time.Unix(req.Ts, 0).Format(time.RFC3339),
+		AnchorTimestamp:  req.Ts,
 	}
 
 	// pending 에 anchor 객체 전체 추가

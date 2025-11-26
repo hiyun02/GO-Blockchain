@@ -50,7 +50,7 @@ func registerPeer(w http.ResponseWriter, r *http.Request) {
 	// 등록된 주소가 아니라면 추가
 	if !already {
 		peers = append(peers, req.Addr)
-		log.Printf("[P2P][REGISTER] new peer joined: %s (cp_id=%s) | total=%d", req.Addr, req.OttID, len(peers))
+		log.Printf("[P2P][REGISTER] new peer joined: %s (ott_id=%s) | total=%d", req.Addr, req.OttID, len(peers))
 	} else {
 		log.Printf("[P2P][REGISTER] peer already exists: %s", req.Addr)
 	}

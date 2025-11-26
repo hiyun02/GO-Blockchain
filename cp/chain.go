@@ -55,35 +55,29 @@ func newLowerChain(cpID string) (*LowerChain, error) {
 	genesis, err := getBlockByIndex(0)
 	// 제네시스 블록이 없는 경우
 	if err != nil {
-		// 제네시스 블록이 없고, 현재노드가 부트노드인 경우에만 제네시스블록 채굴
-		if self == boot {
-			log.Printf("[INIT] No genesis. Boot node mining genesis...")
-			genesis = mineGenesisBlock(cpID)
 
-			// 체인에 추가
-			if err := saveBlockToDB(genesis); err != nil {
-				return nil, fmt.Errorf("save genesis block: %w", err)
-			}
-			if err := updateIndicesForBlock(genesis); err != nil {
-				return nil, fmt.Errorf("update genesis indices: %w", err)
-			}
-			if err := setLatestHeight(genesis.Index); err != nil {
-				return nil, fmt.Errorf("set genesis height: %w", err)
-			}
-			ch.lastBlockTime = time.Now()
+		log.Printf("[INIT] No genesis. Boot node mining genesis...")
+		genesis = mineGenesisBlock(cpID)
 
-			// 부트노드는 여기서 meta_cp_id 저장
-			putMeta("meta_cp_id", cpID)
-			return ch, nil
+		// 체인에 추가
+		if err := saveBlockToDB(genesis); err != nil {
+			return nil, fmt.Errorf("save genesis block: %w", err)
 		}
+		if err := updateIndicesForBlock(genesis); err != nil {
+			return nil, fmt.Errorf("update genesis indices: %w", err)
+		}
+		if err := setLatestHeight(genesis.Index); err != nil {
+			return nil, fmt.Errorf("set genesis height: %w", err)
+		}
+		ch.lastBlockTime = time.Now()
 
-		// 제네시스 없고 부트노드가 아니면, 아직 syncChain이 안 된 상태
-		// => meta_cp_id는 지금 저장하면 안 됨
-		log.Printf("[INIT] No local genesis. Waiting for sync...")
+		// 부트노드는 여기서 meta_cp_id 저장
+		putMeta("meta_cp_id", cpID)
+
+		log.Printf("[INIT] Success Appending local genesis. Waiting for sync...")
 		return ch, nil
 	}
-
-	// block_0 존재하는 경우 => genesis.CpID 를 meta_cp_id 로 저장
+	// block_0 존재하는 경우 => genesis.cpID 를 meta_cp_id 로 저장
 	if err := putMeta("meta_cp_id", genesis.CpID); err != nil {
 		return nil, err
 	}

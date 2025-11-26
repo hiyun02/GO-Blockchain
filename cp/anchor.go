@@ -57,7 +57,7 @@ func getPublicKey(w http.ResponseWriter, r *http.Request) {
 }
 
 // 앵커 서명 생성 (ECDSA)
-func makeAnchorSignature(privPem string, root string, ts int64) string {
+func makeAnchorSignature(privPem string, root string, ts string) string {
 	block, _ := pem.Decode([]byte(privPem))
 	priv, _ := x509.ParseECPrivateKey(block.Bytes)
 
