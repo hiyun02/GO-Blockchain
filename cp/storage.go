@@ -7,6 +7,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/syndtr/goleveldb/leveldb"
 )
@@ -338,7 +339,9 @@ func appendBlockLog(block LowerBlock) {
 	}
 	defer f.Close()
 	// txt 파일에 저장할 내용
-	line := fmt.Sprintf("Block #%02d, Entries : %d, Timestamp : %s \n", block.Index, len(block.Entries), block.Timestamp)
+	line := fmt.Sprintf("Block #%02d, Entries : %04d, EndStamp : %s, Difficulty : %d \n",
+		block.Index, len(block.Entries), time.Unix(time.Now().Unix(), 0).Format(time.RFC3339), block.Difficulty)
+
 	if _, err := f.WriteString(line); err != nil {
 		log.Printf("[LOG][ERROR] cannot write blockHistory: %v", err)
 	}

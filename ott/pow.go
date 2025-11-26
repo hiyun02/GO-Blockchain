@@ -255,56 +255,51 @@ func addBlockToChain(header PoWHeader, hash string, elapsed int64, anchors []Anc
 // 세 블록 마다 채굴 소요시간에 따른 채굴 난이도 조정
 func adjustDifficulty(idx int, elapsed int64) {
 
-	if idx%3 == 0 {
-		log.Printf("[DIFF] Adjust Difficulty Start! Index = %d", idx)
-		// 3 블록의 소요시간 담을 배열 (0으로 초기화)
-		e := [3]int64{}
-		// 최신블록 채굴소요시간
-		e[2] = elapsed
-		if idx > 2 {
-			// 직전 블록 조회
-			b1, err1 := getBlockByIndex(idx - 1)
-			if err1 != nil {
-				log.Printf("[DIFF] Previous Block fetch error ")
-			} else {
-				e[1] = b1.Elapsed
-			} // 직전블록 채굴소요시간
-			// 그 전 블록 조회
-			b2, err2 := getBlockByIndex(idx - 2)
-			if err2 != nil {
-				log.Printf("[DIFF] PRe-Previous Block fetch error")
-			} else {
-				e[0] = b2.Elapsed
-			} // 직전블록의 전블록 채굴소요시간
+	log.Printf("[DIFF] Adjust Difficulty Start! Index = %d", idx)
+	// 3 블록의 소요시간 담을 배열 (0으로 초기화)
+	e := [3]int64{}
+	// 최신블록 채굴소요시간
+	e[2] = elapsed
+	if idx > 2 {
+		// 직전 블록 조회
+		b1, err1 := getBlockByIndex(idx - 1)
+		if err1 != nil {
+			log.Printf("[DIFF] Previous Block fetch error ")
+		} else { // 직전블록 채굴소요시간
+			e[1] = b1.Elapsed
 		}
-
-		avg := (float64)(e[0]+e[1]+e[2]) / 3.0
-		ratio := avg / float64(DiffStandardTime)
-
-		log.Printf("[DIFF] 3-block average elapsed = %.2f sec , ratio : %.2f (b0=%d b1=%d b2=%d)",
-			avg, ratio, e[0], e[1], e[2])
-
-		// 너무 일찍 끝났다면 난이도 올림
-		if ratio < 0.85 {
-			GlobalDifficulty++
-			log.Printf("[DIFF] Increased difficulty => %d", GlobalDifficulty)
-			if GlobalDifficulty == 8 {
-				GlobalDifficulty--
-			}
-
-		} else if ratio > 1.25 { // 너무 오래 걸렸다면 난이도 낮춤
-			GlobalDifficulty--
-			if GlobalDifficulty < 1 {
-				GlobalDifficulty = 1
-			}
-			log.Printf("[DIFF] Decreased difficulty => %d", GlobalDifficulty)
-		} else {
-			log.Printf("[DIFF] No difficulty change (within normal range)")
+		// 전전 블록 조회
+		b2, err2 := getBlockByIndex(idx - 2)
+		if err2 != nil {
+			log.Printf("[DIFF] Pre-Previous Block fetch error")
+		} else { // 전전블록 채굴소요시간
+			e[0] = b2.Elapsed
 		}
-
-	} else {
-		log.Printf("[DIFF] Don't Adjust Difficulty! Index = %d", idx)
 	}
+	avg := (float64)(e[0]+e[1]+e[2]) / 3.0
+	ratio := avg / float64(DiffStandardTime)
+
+	log.Printf("[DIFF] 3-block average elapsed = %.2f sec , ratio : %.2f (b0=%d b1=%d b2=%d)",
+		avg, ratio, e[0], e[1], e[2])
+
+	// 너무 일찍 끝났다면 난이도 올림
+	if ratio < 0.85 {
+		GlobalDifficulty++
+		log.Printf("[DIFF] Increased difficulty => %d", GlobalDifficulty)
+		if GlobalDifficulty == 8 {
+			GlobalDifficulty--
+		}
+
+	} else if ratio > 1.25 { // 너무 오래 걸렸다면 난이도 낮춤
+		GlobalDifficulty--
+		if GlobalDifficulty < 1 {
+			GlobalDifficulty = 1
+		}
+		log.Printf("[DIFF] Decreased difficulty => %d", GlobalDifficulty)
+	} else {
+		log.Printf("[DIFF] No difficulty change (within normal range)")
+	}
+
 }
 
 // 헤더 직렬화 후 SHA-256 해시 계산

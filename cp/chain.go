@@ -38,7 +38,7 @@ var (
 	isMining           atomic.Bool  // 내부적인 채굴 상태 플래그
 	miningStop         atomic.Bool  // 다른 노드에게 영향받는 채굴 중단 플래그 (다른 노드가 성공하면 true)
 	DiffStandardTime   = 20         // 난이도 조정 기준 시간(20초)
-	MiningWatcherTime  = 30         // 채굴 기준시간(30초)
+	MiningWatcherTime  = 1          // 메모리풀 검사시간(1초)
 	NetworkWatcherTime = 60         // 노드 관리 기준시간(60초)
 	ChainWatcherTime   = 300        // 체인 관리 기준시간(300초)
 )

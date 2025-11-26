@@ -7,6 +7,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/syndtr/goleveldb/leveldb"
 )
@@ -162,7 +163,7 @@ func updateIndicesForBlock(block UpperBlock) error {
 // 검색 유틸
 ////////////////////////////////////////////////////////////////////////////////
 
-// parsePtr : "bi:ei" → (bi, ei, ok)
+// parsePtr : "bi:ei" => (bi, ei, ok)
 func parsePtr(s string) (int, int, bool) {
 	parts := strings.Split(s, ":")
 	if len(parts) != 2 {
@@ -247,7 +248,9 @@ func appendBlockLog(block UpperBlock) {
 	}
 	defer f.Close()
 	// txt 파일에 저장할 내용
-	line := fmt.Sprintf("Block #%02d, Entries : %d, Timestamp : %s \n", block.Index, len(block.Records), block.Timestamp)
+	line := fmt.Sprintf("Block #%02d, Entries : %04d, EndStamp : %s, Difficulty : %d \n",
+		block.Index, len(block.Records), time.Unix(time.Now().Unix(), 0).Format(time.RFC3339), block.Difficulty)
+
 	if _, err := f.WriteString(line); err != nil {
 		log.Printf("[LOG][ERROR] cannot write blockHistory: %v", err)
 	}
