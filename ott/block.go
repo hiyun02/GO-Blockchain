@@ -26,7 +26,7 @@ type UpperBlock struct {
 	Nonce      int            `json:"nonce"`       // PoW용 Nonce
 	Difficulty int            `json:"difficulty"`  // 난이도
 	BlockHash  string         `json:"block_hash"`  // 블록 전체 해시
-	Elapsed    int64          `json:"elapsed"`     // 채굴 소요 시간
+	Elapsed    float32        `json:"elapsed"`     // 채굴 소요 시간
 }
 
 // 제네시스 블록 생성
@@ -61,7 +61,7 @@ func mineGenesisBlock(ottID string) UpperBlock {
 		nonce++
 	}
 	mineEnd := time.Now()
-	elapsed := int64(mineEnd.Sub(mineStart).Seconds())
+	elapsed := float32(mineEnd.Sub(mineStart).Seconds())
 	// === UpperBlock으로 변환 ===
 	genesis := UpperBlock{
 		Index:      index,

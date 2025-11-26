@@ -116,11 +116,11 @@ func main() {
 		log.Printf("[WATCHER] starting unified mining watcher (%ds interval)", MiningWatcherTime)
 		startMiningWatcher()
 	}()
-
-	go func() {
-		log.Printf("[WATCHER] starting unified chain watcher (%ds interval)", ChainWatcherTime)
-		startChainWatcher()
-	}()
+	//
+	//go func() {
+	//	log.Printf("[WATCHER] starting unified chain watcher (%ds interval)", ChainWatcherTime)
+	//	startChainWatcher()
+	//}()
 
 	// 8) 메인 Go 루틴 유지
 	select {}

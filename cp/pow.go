@@ -35,7 +35,7 @@ type MineResult struct {
 	BlockHash string
 	Nonce     int
 	Header    PoWHeader
-	Elapsed   int64
+	Elapsed   float32
 }
 
 // 채굴되지 않은 pending 을 감시해서 채굴 시작 신호 보내는 watcher
@@ -156,7 +156,7 @@ func mineBlock(difficulty int, entries []ContentRecord) MineResult {
 
 	// Nonce 탐색
 	rand.Seed(time.Now().UnixNano())
-	nonce := rand.Intn(10000)
+	nonce := rand.Intn(4294967296)
 
 	var hash string
 
@@ -168,7 +168,7 @@ func mineBlock(difficulty int, entries []ContentRecord) MineResult {
 			mineEnd := time.Now()
 			elapsed := mineEnd.Sub(mineStart)
 			//isMining.Store(false) // nonce 찾기는 끝났지만, 아직 저장되지 않았으므로 플래그 변경하지 않음
-			return MineResult{BlockHash: hash, Nonce: nonce, Header: header, Elapsed: int64(elapsed.Seconds())}
+			return MineResult{BlockHash: hash, Nonce: nonce, Header: header, Elapsed: float32(elapsed.Seconds())}
 		}
 		nonce++
 	}
@@ -204,7 +204,7 @@ func receiveBlock(w http.ResponseWriter, r *http.Request) {
 		Hash       string          `json:"hash"`
 		Entries    []ContentRecord `json:"entries"`
 		Difficulty int             `json:"difficulty"`
-		Elapsed    int64           `json:"elapsed"`
+		Elapsed    float32         `json:"elapsed"`
 		Winner     string          `json:"winner"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&msg); err != nil {
@@ -242,7 +242,7 @@ func receiveBlock(w http.ResponseWriter, r *http.Request) {
 }
 
 // 검증된 블록을 로컬 체인에 추가
-func addBlockToChain(header PoWHeader, hash string, elapsed int64, entries []ContentRecord) {
+func addBlockToChain(header PoWHeader, hash string, elapsed float32, entries []ContentRecord) {
 	block := LowerBlock{
 		Index:      header.Index,
 		CpID:       selfID(),
@@ -259,11 +259,11 @@ func addBlockToChain(header PoWHeader, hash string, elapsed int64, entries []Con
 }
 
 // 세 블록 마다 채굴 소요시간에 따른 채굴 난이도 조정
-func adjustDifficulty(idx int, elapsed int64) {
+func adjustDifficulty(idx int, elapsed float32) {
 
 	log.Printf("[DIFF] Adjust Difficulty Start! Index = %d", idx)
 	// 3 블록의 소요시간 담을 배열 (0으로 초기화)
-	e := [3]int64{}
+	e := [3]float32{}
 	// 최신블록 채굴소요시간
 	e[2] = elapsed
 	if idx > 2 {

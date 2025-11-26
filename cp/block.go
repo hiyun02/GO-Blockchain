@@ -28,7 +28,7 @@ type LowerBlock struct {
 	Nonce      int             `json:"nonce"`       // PoW 성공 시점의 Nonce
 	Difficulty int             `json:"difficulty"`  // 난이도 (ex: 4 => "0000"으로 시작)
 	BlockHash  string          `json:"block_hash"`  // 블록 전체 해시 (헤더 기준)
-	Elapsed    int64           `json:"elapsed"`     // 채굴 소요 시간
+	Elapsed    float32         `json:"elapsed"`     // 채굴 소요 시간
 }
 
 // 제네시스 블록 생성
@@ -63,7 +63,7 @@ func mineGenesisBlock(cpID string) LowerBlock {
 		nonce++
 	}
 	mineEnd := time.Now()
-	elapsed := int64(mineEnd.Sub(mineStart).Seconds())
+	elapsed := float32(mineEnd.Sub(mineStart).Seconds())
 	// === LowerBlock으로 변환 ===
 	genesis := LowerBlock{
 		Index:      index,
