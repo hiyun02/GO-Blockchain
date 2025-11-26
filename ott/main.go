@@ -106,14 +106,18 @@ func main() {
 		isBoot.Store(true)
 	}
 
-	// 7) 네트워크 감시 루틴 실행
-	// 네트워크 내 모든 노드를 주기적으로 검사하고,
-	// 응답이 없는 노드를 제거하며, 만약 부트노드가 죽은 경우 새로 선출하는 감시 루프
+	// 7) 네트워크, 채굴, 체인 감시 루틴 실행
 	go func() {
 		log.Printf("[WATCHER] starting unified network watcher (%ds interval)", NetworkWatcherTime)
 		startNetworkWatcher()
+	}()
+
+	go func() {
 		log.Printf("[WATCHER] starting unified mining watcher (%ds interval)", MiningWatcherTime)
 		startMiningWatcher()
+	}()
+
+	go func() {
 		log.Printf("[WATCHER] starting unified chain watcher (%ds interval)", ChainWatcherTime)
 		startChainWatcher()
 	}()

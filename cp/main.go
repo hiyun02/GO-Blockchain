@@ -116,8 +116,14 @@ func main() {
 	go func() {
 		log.Printf("[WATCHER] starting unified network watcher (%ds interval)", NetworkWatcherTime)
 		startNetworkWatcher()
+	}()
+
+	go func() {
 		log.Printf("[WATCHER] starting unified mining watcher (%ds interval)", MiningWatcherTime)
 		startMiningWatcher()
+	}()
+
+	go func() {
 		log.Printf("[WATCHER] starting unified chain watcher (%ds interval)", ChainWatcherTime)
 		startChainWatcher()
 	}()

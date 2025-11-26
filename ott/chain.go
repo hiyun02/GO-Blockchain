@@ -56,7 +56,7 @@ func newUpperChain(ottID string) (*UpperChain, error) {
 	genesis, err := getBlockByIndex(0)
 	// 제네시스 블록이 없는 경우
 	if err != nil {
-		log.Printf("[INIT] No genesis. mining genesis...")
+		log.Printf("[INIT] No genesis. Mining genesis...")
 		genesis = mineGenesisBlock(ottID)
 
 		// 체인에 추가

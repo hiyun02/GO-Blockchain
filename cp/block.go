@@ -38,13 +38,14 @@ func mineGenesisBlock(cpID string) LowerBlock {
 	// 제네시스는 엔트리 없음, merkleRoot는 sha256("")
 	merkleRoot := sha256Hex([]byte{})
 	prevHash := strings.Repeat("0", 64)
+	timestamp := "2025-11-28T01:07:18Z"
 	index := 0
 
 	header := PoWHeader{
 		Index:      index,
 		PrevHash:   prevHash,
 		MerkleRoot: merkleRoot,
-		Timestamp:  time.Unix(time.Now().Unix(), 0).Format(time.RFC3339),
+		Timestamp:  timestamp,
 		Difficulty: GlobalDifficulty,
 	}
 

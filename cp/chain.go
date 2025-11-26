@@ -56,7 +56,7 @@ func newLowerChain(cpID string) (*LowerChain, error) {
 	// 제네시스 블록이 없는 경우
 	if err != nil {
 
-		log.Printf("[INIT] No genesis. Boot node mining genesis...")
+		log.Printf("[INIT] No genesis. Mining genesis...")
 		genesis = mineGenesisBlock(cpID)
 
 		// 체인에 추가
