@@ -7,12 +7,15 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/x509"
+	"encoding/asn1"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"log"
+	"math/big"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -61,12 +64,19 @@ func makeAnchorSignature(privPem string, root string, ts string) string {
 	block, _ := pem.Decode([]byte(privPem))
 	priv, _ := x509.ParseECPrivateKey(block.Bytes)
 
-	msg := []byte(fmt.Sprintf("%s|%d", root, ts))
+	// 메시지는 문자열 그대로 사용
+	msg := []byte(root + "|" + ts)
 	hash := sha256.Sum256(msg)
 
 	r, s, _ := ecdsa.Sign(rand.Reader, priv, hash[:])
-	sig := append(r.Bytes(), s.Bytes()...)
-	return hex.EncodeToString(sig)
+
+	// DER 인코딩(ECDSA 표준)
+	type ecdsaSignature struct {
+		R, S *big.Int
+	}
+	der, _ := asn1.Marshal(ecdsaSignature{R: r, S: s})
+
+	return hex.EncodeToString(der)
 }
 
 // OTT로 MerkleRoot 제출 (부트노드에서만 실행됨)
@@ -99,5 +109,79 @@ func submitAnchor(block LowerBlock) {
 		log.Printf("[ANCHOR][OK] Anchor submitted to OTT (root=%s)", block.MerkleRoot[:8])
 	} else {
 		log.Printf("[ANCHOR][WARN] OTT rejected anchor (status=%d)", resp.StatusCode)
+	}
+}
+func searchContent(keyword string) ([]map[string]any, error) {
+	// 키워드를 가진 블록 찾기
+	blk, err := getBlockByContent(keyword)
+	if err != nil {
+		return nil, err
+	}
+
+	// 블록 내부에서 레코드 매칭
+	matches := findMatchesInBlock(blk, keyword)
+	if len(matches) == 0 {
+		return nil, fmt.Errorf("no matching record")
+	}
+
+	// 결과 구조 생성
+	results := []map[string]any{}
+	for _, m := range matches {
+		results = append(results, buildSearchResult(m.Record, blk, m.EntryIndex))
+	}
+
+	return results, nil
+}
+
+type Match struct {
+	Record     ContentRecord
+	EntryIndex int
+}
+
+// ------------------------------------------
+// 블록 내부에서 keyword에 맞는 레코드를 찾음
+// ------------------------------------------
+func findMatchesInBlock(blk LowerBlock, keyword string) []Match {
+	matches := []Match{}
+
+	for ei, rec := range blk.Entries {
+		if rec.ContentID == keyword {
+			matches = append(matches, Match{rec, ei})
+			continue
+		}
+		if rec.Fingerprint == keyword {
+			matches = append(matches, Match{rec, ei})
+			continue
+		}
+		if title, ok := rec.Info["title"]; ok {
+			if strings.EqualFold(fmt.Sprint(title), keyword) {
+				matches = append(matches, Match{rec, ei})
+			}
+		}
+	}
+
+	return matches
+}
+
+func buildSearchResult(rec ContentRecord, blk LowerBlock, entryIndex int) map[string]any {
+
+	// 1) leaf hash = ContentRecord 해시
+	leaf := hashContentRecord(rec)
+
+	// 2) 블록 전체 leaf hash 배열 생성
+	leafHashes := make([]string, len(blk.Entries))
+	for i, e := range blk.Entries {
+		leafHashes[i] = hashContentRecord(e)
+	}
+
+	// 3) Merkle Proof 생성
+	proof := merkleProof(leafHashes, entryIndex)
+
+	// 4) 최종 결과 패키징
+	return map[string]any{
+		"record": rec,
+		"root":   blk.MerkleRoot, // 블록 생성 시 이미 merkleRootHex 적용됨
+		"leaf":   leaf,
+		"proof":  proof, // [][]string{"sib","L/R"}
 	}
 }

@@ -228,43 +228,6 @@ func getBlockByContent(keyword string) (LowerBlock, error) {
 	return LowerBlock{}, fmt.Errorf("no block found for keyword: %s", keyword)
 }
 
-type SearchResult struct {
-	BlockIndex int           `json:"block_index"`
-	EntryIndex int           `json:"entry_index"`
-	Record     ContentRecord `json:"record"`
-}
-
-func searchInsideBlock(keyword string) (*SearchResult, error) {
-	// 1) 블록 조회 (기존 함수 그대로 사용)
-	blk, err := getBlockByContent(keyword)
-	if err != nil {
-		return nil, err
-	}
-
-	// 2) 블록 내부 순회
-	for ei, rec := range blk.Entries {
-
-		// content_id 정확 일치
-		if rec.ContentID == keyword {
-			return &SearchResult{BlockIndex: blk.Index, EntryIndex: ei, Record: rec}, nil
-		}
-
-		// fingerprint 정확 일치
-		if rec.Fingerprint == keyword {
-			return &SearchResult{BlockIndex: blk.Index, EntryIndex: ei, Record: rec}, nil
-		}
-
-		// info.title 정확 일치
-		if title, ok := rec.Info["title"]; ok {
-			if titleStr, ok2 := title.(string); ok2 && strings.EqualFold(titleStr, keyword) {
-				return &SearchResult{BlockIndex: blk.Index, EntryIndex: ei, Record: rec}, nil
-			}
-		}
-	}
-
-	return nil, fmt.Errorf("record not found inside block")
-}
-
 // ==========================
 // 전체 장부(블록) 조회 유틸
 // ==========================

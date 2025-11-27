@@ -90,13 +90,15 @@ func RegisterAPI(mux *http.ServeMux, chain *LowerChain) {
 			return
 		}
 
-		result, err := searchInsideBlock(kw)
+		// 검색 수행
+		results, err := searchContent(kw)
 		if err != nil {
-			http.Error(w, "record not found", http.StatusNotFound)
+			http.Error(w, err.Error(), http.StatusNotFound)
 			return
 		}
 
-		writeJSON(w, http.StatusOK, result)
+		// 결과 반환
+		writeJSON(w, http.StatusOK, results)
 	})
 
 	// 전체 장부 조회 (페이지네이션)

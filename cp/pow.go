@@ -285,7 +285,7 @@ func adjustDifficulty(idx int, elapsed float32) {
 	avg := (float64)(e[0]+e[1]+e[2]) / 3.0
 	ratio := avg / float64(DiffStandardTime)
 
-	log.Printf("[DIFF] 3-block average elapsed = %.2f sec , ratio : %.2f (b0=%d b1=%d b2=%d)",
+	log.Printf("[DIFF] 3-block average elapsed = %.2f sec , ratio : %.2f (b0=%.2f b1=%.2f b2=%.2f)",
 		avg, ratio, e[0], e[1], e[2])
 
 	// 너무 일찍 끝났다면 난이도 올림
