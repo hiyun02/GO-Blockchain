@@ -191,7 +191,7 @@ func requestCpSearch(cpAddr, keyword string) ([]map[string]any, error) {
 //	return verified, nil
 //}
 
-//	CP가 보낸 proof(JSON 배열) => [][2]string 로 변환
+// CP가 보낸 proof(JSON 배열) => [][2]string 로 변환
 func parseProof(arr []any) [][2]string {
 	proof := make([][2]string, 0)
 	for _, v := range arr {
