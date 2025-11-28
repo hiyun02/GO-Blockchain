@@ -4,10 +4,8 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
-	"net/url"
 	"strconv"
 	"time"
 )
@@ -128,14 +126,13 @@ func RegisterAPI(mux *http.ServeMux, chain *UpperChain) {
 	})
 
 	// CP 체인에게 검색 요청을 중계하는 API
-	// GET /cpSearch?cp_id=<id>&keyword=<keyword>
-	mux.HandleFunc("/cpSearch", func(w http.ResponseWriter, r *http.Request) {
+	// GET /query?cp_id=<id>&keyword=<keyword>
+	mux.HandleFunc("/query", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
 
-		// --- 입력 파라미터 추출 ---
 		cpID := r.URL.Query().Get("cp_id")
 		kw := r.URL.Query().Get("keyword")
 
@@ -144,43 +141,16 @@ func RegisterAPI(mux *http.ServeMux, chain *UpperChain) {
 			return
 		}
 
-		// --- CP 부트노드 주소 조회 ---
-		cpBootMapMu.RLock()
-		cpAddr, ok := cpBootMap[cpID]
-		cpBootMapMu.RUnlock()
-
-		if !ok || cpAddr == "" {
-			http.Error(w, "unknown cp_id or cp boot address missing", http.StatusNotFound)
-			return
-		}
-
-		// --- CP 체인 /search 요청 URL ---
-		targetURL := fmt.Sprintf("http://%s/search?value=%s", cpAddr, url.QueryEscape(kw))
-
-		// --- CP 부트노드로 HTTP 요청 보내기 ---
-		resp, err := http.Get(targetURL)
+		// 쿼리 검색 수행 후 반환
+		resultBytes, status, err := handleCpSearch(cpID, kw)
 		if err != nil {
-			http.Error(w, "failed to reach CP node: "+err.Error(), http.StatusBadGateway)
-			return
-		}
-		defer resp.Body.Close()
-
-		// CP가 에러코드를 그대로 보낼 수 있으므로 반영
-		if resp.StatusCode != http.StatusOK {
-			body, _ := io.ReadAll(resp.Body)
-			http.Error(w, fmt.Sprintf("cp error: %s", string(body)), resp.StatusCode)
-			return
-		}
-
-		// --- 결과를 그대로 OTT에서 클라이언트에게 전달 ---
-		body, err := io.ReadAll(resp.Body)
-		if err != nil {
-			http.Error(w, "failed reading cp response", http.StatusInternalServerError)
+			http.Error(w, err.Error(), status)
 			return
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		w.Write(body)
+		w.WriteHeader(status)
+		w.Write(resultBytes)
 	})
+
 }

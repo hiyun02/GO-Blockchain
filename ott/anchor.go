@@ -4,6 +4,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/sha256"
 	"crypto/x509"
+	"encoding/asn1"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
@@ -12,6 +13,7 @@ import (
 	"log"
 	"math/big"
 	"net/http"
+	"net/url"
 )
 
 // OTT에서 CP가 제출한 앵커를 수신하고 검증한 후 pending 추가함수 호출(부트노드만 수행)
@@ -49,28 +51,25 @@ func addAnchor(w http.ResponseWriter, r *http.Request) {
 	// 파싱된 공개키를 ECDSA 공개키 타입으로 변환 (타입 단언)
 	pubKey := pubIfc.(*ecdsa.PublicKey)
 
-	// 서명 검증 과정 시작(ECDSA.Verify)
-	// CP가 서명한 원문 메시지 구성
-	msg := []byte(fmt.Sprintf("%s|%d", req.Root, req.Ts))
-
-	// 메시지를 SHA-256으로 해시 (서명은 해시값에 대해 수행됨)
+	// 메시지는 문자열 그대로 사용
+	msg := []byte(req.Root + "|" + req.Ts)
 	hash := sha256.Sum256(msg)
 
-	// CP로부터 전달받은 서명(hex 문자열)을 바이트 배열로 디코딩
+	// DER 디코딩
 	sigBytes, _ := hex.DecodeString(req.Sig)
 
-	// ECDSA 서명은 (r, s) 두 부분으로 나뉘므로 반으로 분할
-	half := len(sigBytes) / 2
-	rBytes := sigBytes[:half]
-	sBytes := sigBytes[half:]
+	type ecdsaSignature struct {
+		R, S *big.Int
+	}
 
-	// 각각 big.Int 타입으로 변환하여 서명 파라미터 구성
-	sigR := new(big.Int).SetBytes(rBytes)
-	sigS := new(big.Int).SetBytes(sBytes)
+	var sigStruct ecdsaSignature
+	_, err = asn1.Unmarshal(sigBytes, &sigStruct)
+	if err != nil {
+		http.Error(w, "invalid signature format", 403)
+		return
+	}
 
-	// 공개키(pubKey)로 해시(hash[:])와 서명(r,s)을 검증
-	// 유효하면 true 반환 => 정상 서명 (CP가 실제 서명한 것)
-	valid := ecdsa.Verify(pubKey, hash[:], sigR, sigS)
+	valid := ecdsa.Verify(pubKey, hash[:], sigStruct.R, sigStruct.S)
 
 	if !valid {
 		http.Error(w, "invalid signature", 403)
@@ -98,4 +97,111 @@ func addAnchor(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[ANCHOR] Call broadcastNewCpBoot() for store %s : %s to CpBootMap ... )", req.CpID, req.CpBoot)
 	broadcastNewCpBoot(req.CpID, req.CpBoot)
 	w.WriteHeader(http.StatusOK)
+}
+
+// CP 검색 프로세스 (핸들러에서 호출)
+func handleCpSearch(cpID, keyword string) ([]byte, int, error) {
+
+	// 1) CP 부트 주소 조회
+	cpAddr := getCpBootAddr(cpID)
+	if cpAddr == "" {
+		fmt.Println("[Anchor] Invalid CP Boot Address")
+		return nil, http.StatusBadGateway, nil
+	}
+
+	// 2) CP 체인에 검색 요청 (/search)
+	items, err := requestCpSearch(cpAddr, keyword)
+	if err != nil {
+		return nil, http.StatusBadGateway, err
+	}
+
+	//// 3) OTT가 AnchorRoot + MerkleProof 검증
+	//verified, err := verifyCpResults(cpID, items)
+	//if err != nil {
+	//	return nil, http.StatusInternalServerError, err
+	//}
+
+	// 4) JSON 반환
+	out, _ := json.Marshal(items)
+	return out, http.StatusOK, nil
+}
+
+// CP /search 호출 (record+root+leaf+proof)
+func requestCpSearch(cpAddr, keyword string) ([]map[string]any, error) {
+
+	url := fmt.Sprintf("http://%s/search?value=%s", cpAddr, url.QueryEscape(keyword))
+
+	resp, err := http.Get(url)
+	if err != nil {
+		return nil, fmt.Errorf("failed to reach CP node: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("cp error: %s", string(b))
+	}
+
+	var items []map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&items); err != nil {
+		return nil, fmt.Errorf("invalid JSON from CP")
+	}
+
+	return items, nil
+}
+
+//
+//// OTT -> CP 결과 검증 (AnchorRoot + MerkleProof)
+//func verifyCpResults(cpID string, items []map[string]any) ([]map[string]any, error) {
+//
+//	// 1) AnchorRoot 조회
+//	anchorMu.RLock()
+//	anch, ok := anchorMap[cpID]
+//	anchorMu.RUnlock()
+//
+//	if !ok {
+//		return nil, fmt.Errorf("no anchor for cp_id=%s", cpID)
+//	}
+//	anchorRoot := anch.Root
+//
+//	verified := []map[string]any{}
+//
+//	// 2) 결과별 검증 수행
+//	for _, it := range items {
+//
+//		// (1) block root 일치 여부
+//		blockRoot, ok := it["root"].(string)
+//		if !ok || blockRoot != anchorRoot {
+//			continue
+//		}
+//
+//		// (2) leaf hash
+//		leaf, _ := it["leaf"].(string)
+//
+//		// (3) proof 파싱
+//		rawProof, _ := it["proof"].([]any)
+//		proof := parseProof(rawProof)
+//
+//		// (4) Merkle 증명 검증
+//		if verifyMerkleProof(leaf, blockRoot, proof) {
+//			verified = append(verified, it)
+//		}
+//	}
+//
+//	return verified, nil
+//}
+
+//	CP가 보낸 proof(JSON 배열) => [][2]string 로 변환
+func parseProof(arr []any) [][2]string {
+	proof := make([][2]string, 0)
+	for _, v := range arr {
+		p, ok := v.([]any)
+		if !ok || len(p) != 2 {
+			continue
+		}
+		sib, _ := p[0].(string)
+		pos, _ := p[1].(string)
+		proof = append(proof, [2]string{sib, pos})
+	}
+	return proof
 }
