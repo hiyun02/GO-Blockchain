@@ -65,7 +65,7 @@ func main() {
 	// 6) 자동 부트스트랩
 	//  부트노드가 아니라면 부트노드에 자신의 주소를 등록 -> 부트노드로부터 노드 주소 목록 받아 등록 -> 체인 동기화
 	if boot != "" && self != "" && boot != self {
-		payload := map[string]string{"addr": self, "ott_id": ottID}
+		payload := map[string]string{"addr": self, "cp_id": ottID}
 		b, _ := json.Marshal(payload)
 
 		resp, err := http.Post("http://"+boot+"/register", "application/json", strings.NewReader(string(b)))
@@ -80,27 +80,27 @@ func main() {
 			log.Printf("[BOOT] register failed : status=%d body=%s", resp.StatusCode, string(body))
 			log.Println("[BOOT] Now, This is Boot Node. skipping auto-join")
 			isBoot.Store(true)
-			return
-		}
+		} else {
 
-		var reg struct {
-			Peers []string `json:"peers"`
-		}
-		if err := json.NewDecoder(resp.Body).Decode(&reg); err != nil {
-			log.Printf("[BOOT] decode peers failed: %v", err)
-			return
-		}
-		log.Printf("[BOOT-JOIN] received %d peers from %s: %v", len(reg.Peers), boot, reg.Peers)
+			var reg struct {
+				Peers []string `json:"peers"`
+			}
+			if err := json.NewDecoder(resp.Body).Decode(&reg); err != nil {
+				log.Printf("[BOOT] decode peers failed: %v", err)
+				return
+			}
+			log.Printf("[BOOT-JOIN] received %d peers from %s: %v", len(reg.Peers), boot, reg.Peers)
 
-		// 부트노드와 부트노드에게 받은 노드 주소들을 peers 객체에 추가함
-		addPeerInternal(boot)
-		for _, addr := range reg.Peers {
-			addPeerInternal(addr)
-		}
+			// 부트노드와 부트노드에게 받은 노드 주소들을 peers 객체에 추가함
+			addPeerInternal(boot)
+			for _, addr := range reg.Peers {
+				addPeerInternal(addr)
+			}
 
-		// 초기 체인 동기화(부트노드로부터)
-		go syncChain(boot)
-		log.Printf("[BOOT] Chain Initialized by %s(boot node); peers=%v", boot, reg.Peers)
+			// 초기 체인 동기화(부트노드로부터)
+			go syncChain(boot)
+			log.Printf("[BOOT] Chain Initialized by %s(boot node); peers=%v", boot, reg.Peers)
+		}
 	} else {
 		log.Println("[BOOT] This is Boot Node, skipping auto-join")
 		isBoot.Store(true)
