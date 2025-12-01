@@ -111,9 +111,19 @@ func submitAnchor(block LowerBlock) {
 		log.Printf("[ANCHOR][WARN] OTT rejected anchor (status=%d)", resp.StatusCode)
 	}
 }
-func searchContent(keyword string) ([]map[string]any, error) {
+
+// 검색 응답 구조체
+type SearchResponse struct {
+	Record ContentRecord `json:"record"`
+	Root   string        `json:"root"`
+	Leaf   string        `json:"leaf"`
+	Proof  [][2]string   `json:"proof"`
+}
+
+// 쿼리 수행 함수
+func searchContent(keyword string) ([]SearchResponse, error) {
 	// 키워드를 가진 블록 찾기
-	blk, err := getBlockByContent(keyword)
+	blk, err := getBlockByContentForQuery(keyword)
 	if err != nil {
 		return nil, err
 	}
@@ -125,9 +135,9 @@ func searchContent(keyword string) ([]map[string]any, error) {
 	}
 
 	// 결과 구조 생성
-	results := []map[string]any{}
+	results := make([]SearchResponse, 0, len(matches))
 	for _, m := range matches {
-		results = append(results, buildSearchResult(m.Record, blk, m.EntryIndex))
+		results = append(results, buildSearchResponse(m.Record, blk, m.EntryIndex))
 	}
 
 	return results, nil
@@ -138,18 +148,12 @@ type Match struct {
 	EntryIndex int
 }
 
-// ------------------------------------------
 // 블록 내부에서 keyword에 맞는 레코드를 찾음
-// ------------------------------------------
-func findMatchesInBlock(blk LowerBlock, keyword string) []Match {
+func findMatchesInBlock(blk *LowerBlock, keyword string) []Match {
 	matches := []Match{}
 
 	for ei, rec := range blk.Entries {
 		if rec.ContentID == keyword {
-			matches = append(matches, Match{rec, ei})
-			continue
-		}
-		if rec.Fingerprint == keyword {
 			matches = append(matches, Match{rec, ei})
 			continue
 		}
@@ -163,7 +167,7 @@ func findMatchesInBlock(blk LowerBlock, keyword string) []Match {
 	return matches
 }
 
-func buildSearchResult(rec ContentRecord, blk LowerBlock, entryIndex int) map[string]any {
+func buildSearchResponse(rec ContentRecord, blk *LowerBlock, entryIndex int) SearchResponse {
 
 	// 1) leaf hash = ContentRecord 해시
 	leaf := hashContentRecord(rec)
@@ -178,10 +182,42 @@ func buildSearchResult(rec ContentRecord, blk LowerBlock, entryIndex int) map[st
 	proof := merkleProof(leafHashes, entryIndex)
 
 	// 4) 최종 결과 패키징
-	return map[string]any{
-		"record": rec,
-		"root":   blk.MerkleRoot, // 블록 생성 시 이미 merkleRootHex 적용됨
-		"leaf":   leaf,
-		"proof":  proof, // [][]string{"sib","L/R"}
+	return SearchResponse{
+		Record: rec,
+		Root:   blk.MerkleRoot,
+		Leaf:   leaf,
+		Proof:  proof,
 	}
+}
+
+// 키워드로 블록 조회
+//   - keyword가 Info(title 등)에 매칭되면
+//     해당 포인터("bi:ei")를 통해 블록을 찾아 반환
+//   - 여러 매칭이 가능할 수 있으나, 여기서는 최초 매칭 1개만 반환
+func getBlockByContentForQuery(keyword string) (*LowerBlock, error) {
+
+	// Info(title 등) 색인 조회 (소문자 normalize)
+	if v, err := db.Get([]byte("info_title_"+strings.ToLower(keyword)), nil); err == nil {
+		if bi, _, ok := parsePtr(string(v)); ok {
+			return getBlockByIndexForPointer(bi)
+		}
+	}
+
+	return nil, fmt.Errorf("no block found for keyword: %s", keyword)
+}
+
+func getBlockByIndexForPointer(index int) (*LowerBlock, error) {
+	key := fmt.Sprintf("block_%d", index)
+
+	data, err := db.Get([]byte(key), nil)
+	if err != nil {
+		return nil, fmt.Errorf("block_%d not found: %w", index, err)
+	}
+
+	var block LowerBlock
+	if err := json.Unmarshal(data, &block); err != nil {
+		return nil, fmt.Errorf("failed to decode block_%d: %w", index, err)
+	}
+
+	return &block, nil
 }
