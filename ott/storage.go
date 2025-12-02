@@ -286,3 +286,50 @@ func resetLocalDB() error {
 	log.Printf("[CHAIN] Local chain RESET complete ")
 	return nil
 }
+
+type AnchorInfo struct {
+	Root string `json:"root"`
+	Ts   string `json:"ts"`
+}
+
+func saveAnchorToDB(cpID, root string, ts string) error {
+	ai := AnchorInfo{Root: root, Ts: ts}
+	b, _ := json.Marshal(ai)
+	key := "anchor_" + cpID
+	return db.Put([]byte(key), b, nil)
+}
+func loadAnchorFromDB(cpID string) (AnchorInfo, bool) {
+	key := "anchor_" + cpID
+	data, err := db.Get([]byte(key), nil)
+	if err != nil {
+		return AnchorInfo{}, false
+	}
+	var ai AnchorInfo
+	if err := json.Unmarshal(data, &ai); err != nil {
+		return AnchorInfo{}, false
+	}
+	return ai, true
+}
+
+// 재부팅 후에도 계속 MerkleProof 검증을 가능하게 만들기 위해
+// LevelDB에 저장된 anchor_* 데이터를 모두 읽어 anchorMap에 복원
+func loadAllAnchorsAtBoot() {
+	// LevelDB 의 전체 Key-Value를 순회하기 위한 iterator 생성
+	iter := db.NewIterator(nil, nil)
+	// 반복하면서 모든 키 탐색
+	for iter.Next() {
+		key := string(iter.Key())
+		if strings.HasPrefix(key, "anchor_") {
+			var ai AnchorInfo
+			// Value(JSON)를 역직렬화
+			if err := json.Unmarshal(iter.Value(), &ai); err == nil {
+				// "anchor_<cpid>" 중에서 cpid만 추출
+				cpID := strings.TrimPrefix(key, "anchor_")
+				// 전역변수에 추가
+				anchorMap[cpID] = ai
+				log.Printf("[ANCHOR] Loaded Anchor from DB: %s => %s", cpID, ai.Root)
+			}
+		}
+	}
+	iter.Release()
+}

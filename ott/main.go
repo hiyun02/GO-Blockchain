@@ -24,6 +24,8 @@ func main() {
 	initDB(dbPath)
 	defer closeDB()
 	log.Printf("[START] LevelDB: %s\n", dbPath)
+	loadAllAnchorsAtBoot()
+	log.Printf("[START] Load AnchorMap From LevelDB: %s\n", dbPath)
 
 	// 3) 체인 부팅 (제네시스 자동 생성/복구 포함)
 	chain, err := newUpperChain(ottID)

@@ -26,21 +26,23 @@ type UpperChain struct {
 
 // 전역 상태 관리 변수
 var (
-	ch                 *UpperChain               // 체인 접근을 위한 전역변수
-	self               string                    // 현재 노드 주소 NODE_ADDR (예: "cp-node-01:5000")
-	boot               string                    // 현재 네트워크 상의 부트노드 주소
-	startedAt          = time.Now()              // 현재 노드 시작 시간
-	isBoot             atomic.Bool               // 현재 노드가 부트노드인지 여부
-	bootAddrMu         sync.RWMutex              // 부트노드 주소 접근 시 동시성 보호용 RW 잠금 객체
-	cpBootMap          = make(map[string]string) // OTT 부트노드와 연결될 CP 체인들의 부트노드 주소록
-	cpBootMapMu        sync.RWMutex              // cpBootMap 접근 시 동시성 보호용 RW 잠금 객체
-	GlobalDifficulty   = 4                       // 전역 난이도 설정 (모든 노드 동일)
-	isMining           atomic.Bool               // 내부적인 채굴 상태 플래그
-	miningStop         atomic.Bool               // 다른 노드에게 영향받는 채굴 중단 플래그 (다른 노드가 성공하면 true)
-	DiffStandardTime   = 20                      // 난이도 조정 기준 시간(20초)
-	MiningWatcherTime  = 1                       // 채굴 기준시간(30초)
-	NetworkWatcherTime = 60                      // 노드 관리 기준시간(60초)
-	ChainWatcherTime   = 300                     // 체인 관리 기준시간(300초)
+	ch                 *UpperChain                   // 체인 접근을 위한 전역변수
+	self               string                        // 현재 노드 주소 NODE_ADDR (예: "cp-node-01:5000")
+	boot               string                        // 현재 네트워크 상의 부트노드 주소
+	startedAt          = time.Now()                  // 현재 노드 시작 시간
+	isBoot             atomic.Bool                   // 현재 노드가 부트노드인지 여부
+	bootAddrMu         sync.RWMutex                  // 부트노드 주소 접근 시 동시성 보호용 RW 잠금 객체
+	cpBootMap          = make(map[string]string)     // OTT 부트노드와 연결될 CP 체인들의 부트노드 주소록
+	cpBootMapMu        sync.RWMutex                  // cpBootMap 접근 시 동시성 보호용 RW 잠금 객체
+	GlobalDifficulty   = 4                           // 전역 난이도 설정 (모든 노드 동일)
+	isMining           atomic.Bool                   // 내부적인 채굴 상태 플래그
+	miningStop         atomic.Bool                   // 다른 노드에게 영향받는 채굴 중단 플래그 (다른 노드가 성공하면 true)
+	DiffStandardTime   = 20                          // 난이도 조정 기준 시간(20초)
+	MiningWatcherTime  = 1                           // 채굴 기준시간(30초)
+	NetworkWatcherTime = 60                          // 노드 관리 기준시간(60초)
+	ChainWatcherTime   = 300                         // 체인 관리 기준시간(300초)
+	anchorMap          = make(map[string]AnchorInfo) // CP 별 최신 Anchor 관리
+	anchorMu           sync.RWMutex                  //
 )
 
 // 체인 초기화

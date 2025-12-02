@@ -90,13 +90,35 @@ func addAnchor(w http.ResponseWriter, r *http.Request) {
 
 	// pending 에 anchor 객체 전체 추가
 	appendPending([]AnchorRecord{ar})
-
 	log.Printf("[ANCHOR] Pending anchor added: %+v", ar)
 
-	// 송신한 CP체인의 CPID와 부트노드 주소를 저장한 후 다른 ott 노드에 전파함
-	log.Printf("[ANCHOR] Call broadcastNewCpBoot() for store %s : %s to CpBootMap ... )", req.CpID, req.CpBoot)
-	broadcastNewCpBoot(req.CpID, req.CpBoot)
+	// AnchorRoot LevelDB 저장
+	if err := saveAnchorToDB(req.CpID, req.Root, req.Ts); err != nil {
+		log.Printf("[ANCHOR][ERROR] Failed to save anchor to DB for %s: %v", req.CpID, err)
+	} else {
+		log.Printf("[ANCHOR][DB] Success to save anchor to DB for %s: %v", req.CpID, err)
+	}
+
+	// 전역변수에 저장
+	anchorMu.Lock()
+	anchorMap[req.CpID] = AnchorInfo{Root: req.Root, Ts: req.Ts}
+	anchorMu.Unlock()
+
+	// 새로 수신한 CP 부트노드의 주소가, 기존 Cp체인의 부트노드 주소와 다른 경우
+	if req.CpBoot != getCpBootAddr(req.CpID) {
+		// 송신한 CP체인의 CPID와 부트노드 주소를 저장한 후 다른 ott 노드에 전파함
+		log.Printf("[ANCHOR] Call broadcastNewCpBoot() for store %s : %s to CpBootMap ... )", req.CpID, req.CpBoot)
+		broadcastNewCpBoot(req.CpID, req.CpBoot)
+	}
 	w.WriteHeader(http.StatusOK)
+}
+
+// CP가 반환하는 검색 응답 구조체
+type SearchResponse struct {
+	Record ContentRecord `json:"record"`
+	Root   string        `json:"root"`
+	Leaf   string        `json:"leaf"`
+	Proof  [][2]string   `json:"proof"`
 }
 
 // CP 검색 프로세스 (핸들러에서 호출)
@@ -105,7 +127,7 @@ func handleCpSearch(cpID, keyword string) ([]byte, int, error) {
 	// 1) CP 부트 주소 조회
 	cpAddr := getCpBootAddr(cpID)
 	if cpAddr == "" {
-		fmt.Println("[Anchor] Invalid CP Boot Address")
+		fmt.Println("[Search] Invalid CP Boot Address")
 		return nil, http.StatusBadGateway, nil
 	}
 
@@ -115,19 +137,19 @@ func handleCpSearch(cpID, keyword string) ([]byte, int, error) {
 		return nil, http.StatusBadGateway, err
 	}
 
-	//// 3) OTT가 AnchorRoot + MerkleProof 검증
-	//verified, err := verifyCpResults(cpID, items)
-	//if err != nil {
-	//	return nil, http.StatusInternalServerError, err
-	//}
+	// 3) OTT AnchorRoot + MerkleProof 검증
+	verified, err := verifyCpResults(cpID, items)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
 
 	// 4) JSON 반환
-	out, _ := json.Marshal(items)
+	out, _ := json.Marshal(verified)
 	return out, http.StatusOK, nil
 }
 
-// CP /search 호출 (record+root+leaf+proof)
-func requestCpSearch(cpAddr, keyword string) ([]map[string]any, error) {
+// CP /search 호출 (CP가 주는 JSON = []SearchResponse)
+func requestCpSearch(cpAddr, keyword string) ([]SearchResponse, error) {
 
 	url := fmt.Sprintf("http://%s/search?value=%s", cpAddr, url.QueryEscape(keyword))
 
@@ -142,7 +164,8 @@ func requestCpSearch(cpAddr, keyword string) ([]map[string]any, error) {
 		return nil, fmt.Errorf("cp error: %s", string(b))
 	}
 
-	var items []map[string]any
+	// SearchResponse 배열로 받는다
+	var items []SearchResponse
 	if err := json.NewDecoder(resp.Body).Decode(&items); err != nil {
 		return nil, fmt.Errorf("invalid JSON from CP")
 	}
@@ -150,58 +173,33 @@ func requestCpSearch(cpAddr, keyword string) ([]map[string]any, error) {
 	return items, nil
 }
 
-//
-//// OTT -> CP 결과 검증 (AnchorRoot + MerkleProof)
-//func verifyCpResults(cpID string, items []map[string]any) ([]map[string]any, error) {
-//
-//	// 1) AnchorRoot 조회
-//	anchorMu.RLock()
-//	anch, ok := anchorMap[cpID]
-//	anchorMu.RUnlock()
-//
-//	if !ok {
-//		return nil, fmt.Errorf("no anchor for cp_id=%s", cpID)
-//	}
-//	anchorRoot := anch.Root
-//
-//	verified := []map[string]any{}
-//
-//	// 2) 결과별 검증 수행
-//	for _, it := range items {
-//
-//		// (1) block root 일치 여부
-//		blockRoot, ok := it["root"].(string)
-//		if !ok || blockRoot != anchorRoot {
-//			continue
-//		}
-//
-//		// (2) leaf hash
-//		leaf, _ := it["leaf"].(string)
-//
-//		// (3) proof 파싱
-//		rawProof, _ := it["proof"].([]any)
-//		proof := parseProof(rawProof)
-//
-//		// (4) Merkle 증명 검증
-//		if verifyMerkleProof(leaf, blockRoot, proof) {
-//			verified = append(verified, it)
-//		}
-//	}
-//
-//	return verified, nil
-//}
+// OTT -> CP 검색 결과 검증
+func verifyCpResults(cpID string, items []SearchResponse) ([]SearchResponse, error) {
 
-// CP가 보낸 proof(JSON 배열) => [][2]string 로 변환
-func parseProof(arr []any) [][2]string {
-	proof := make([][2]string, 0)
-	for _, v := range arr {
-		p, ok := v.([]any)
-		if !ok || len(p) != 2 {
+	// 1) OTT가 저장한 최신 AnchorRoot 조회
+	anchorMu.RLock()
+	anch, ok := anchorMap[cpID]
+	anchorMu.RUnlock()
+
+	if !ok {
+		return nil, fmt.Errorf("no anchor for cp_id=%s", cpID)
+	}
+	anchorRoot := anch.Root
+
+	verified := []SearchResponse{}
+	// 2) 결과별 검증 수행
+	for _, it := range items {
+
+		// block root 일치 여부
+		if it.Root != anchorRoot {
 			continue
 		}
-		sib, _ := p[0].(string)
-		pos, _ := p[1].(string)
-		proof = append(proof, [2]string{sib, pos})
+
+		// Merkle 증명 검증
+		if verifyMerkleProof(it.Leaf, it.Root, it.Proof) {
+			verified = append(verified, it)
+		}
 	}
-	return proof
+
+	return verified, nil
 }
