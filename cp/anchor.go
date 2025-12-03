@@ -178,13 +178,16 @@ func buildSearchResponse(rec ContentRecord, blk *LowerBlock, entryIndex int) Sea
 		leafHashes[i] = hashContentRecord(e)
 	}
 
-	// 3) Merkle Proof 생성
+	// 3) 검색된 레코드가 속한 블록을 기준으로 Merkle Proof 생성
 	proof := merkleProof(leafHashes, entryIndex)
 
-	// 4) 최종 결과 패키징
+	// 4) 최신 블록의 Root 가져오기
+	latestRoot := getLatestRoot()
+
+	// 5) 최종 결과 패키징
 	return SearchResponse{
 		Record: rec,
-		Root:   blk.MerkleRoot,
+		Root:   latestRoot,
 		Leaf:   leaf,
 		Proof:  proof,
 	}
