@@ -94,9 +94,9 @@ func addAnchor(w http.ResponseWriter, r *http.Request) {
 
 	// AnchorRoot LevelDB 저장
 	if err := saveAnchorToDB(req.CpID, req.Root, req.Ts); err != nil {
-		log.Printf("[ANCHOR][ERROR] Failed to save anchor to DB for %s: %v", req.CpID, err)
+		log.Printf("[ANCHOR][ERROR] Failed to save anchor to DB for %s", req.CpID)
 	} else {
-		log.Printf("[ANCHOR][DB] Success to save anchor to DB for %s: %v", req.CpID, err)
+		log.Printf("[ANCHOR][DB] Success to save anchor to DB for %s", req.CpID)
 	}
 
 	// 전역변수에 저장
@@ -115,10 +115,11 @@ func addAnchor(w http.ResponseWriter, r *http.Request) {
 
 // CP가 반환하는 검색 응답 구조체
 type SearchResponse struct {
-	Record ContentRecord `json:"record"`
-	Root   string        `json:"root"`
-	Leaf   string        `json:"leaf"`
-	Proof  [][2]string   `json:"proof"`
+	Record     ContentRecord `json:"record"`
+	BlockRoot  string        `json:"block_root"`
+	LatestRoot string        `json:"latest_root"`
+	Leaf       string        `json:"leaf"`
+	Proof      [][2]string   `json:"proof"`
 }
 
 // CP 검색 프로세스 (핸들러에서 호출)
@@ -169,13 +170,12 @@ func requestCpSearch(cpAddr, keyword string) ([]SearchResponse, error) {
 	if err := json.NewDecoder(resp.Body).Decode(&items); err != nil {
 		return nil, fmt.Errorf("invalid JSON from CP")
 	}
-
+	logInfo("[QUERY] Response From CP Chain : %d", len(items))
 	return items, nil
 }
 
 // OTT -> CP 검색 결과 검증
 func verifyCpResults(cpID string, items []SearchResponse) ([]SearchResponse, error) {
-
 	// 1) OTT가 저장한 최신 AnchorRoot 조회
 	anchorMu.RLock()
 	anch, ok := anchorMap[cpID]
@@ -190,16 +190,19 @@ func verifyCpResults(cpID string, items []SearchResponse) ([]SearchResponse, err
 	// 2) 결과별 검증 수행
 	for _, it := range items {
 
-		// block root 일치 여부
-		if it.Root != anchorRoot {
+		// 최신 블록 root 일치 여부
+		if it.LatestRoot != anchorRoot {
+			logInfo("[QUERY][ERROR] Anchor Root Mismatch")
 			continue
+		} else {
+			logInfo("[QUERY] Success to Latest Anchor Verification ")
 		}
 
-		// Merkle 증명 검증
-		if verifyMerkleProof(it.Leaf, it.Root, it.Proof) {
+		// 키워드가 포함된 블록의 Merkle 증명을 통한 유효성 검증
+		if verifyMerkleProof(it.Leaf, it.BlockRoot, it.Proof) {
 			verified = append(verified, it)
+			logInfo("[QUERY][SUCCESS] Verified Record Appended")
 		}
 	}
-
 	return verified, nil
 }

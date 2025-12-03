@@ -140,6 +140,7 @@ func RegisterAPI(mux *http.ServeMux, chain *UpperChain) {
 			http.Error(w, "cp_id and keyword required", http.StatusBadRequest)
 			return
 		}
+		logInfo("[QUERY] Target CP Chain: %s, Keyword: %s", cpID, kw)
 
 		// 쿼리 검색 수행 후 반환
 		resultBytes, status, err := handleCpSearch(cpID, kw)

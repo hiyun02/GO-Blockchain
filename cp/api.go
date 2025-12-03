@@ -89,14 +89,14 @@ func RegisterAPI(mux *http.ServeMux, chain *LowerChain) {
 			http.Error(w, "value parameter required", http.StatusBadRequest)
 			return
 		}
-
+		logInfo("search query keyword: %s", kw)
 		// 검색 수행
 		results, err := searchContent(kw)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusNotFound)
 			return
 		}
-
+		logInfo("query response's length: %s", len(results))
 		// 결과 반환
 		writeJSON(w, http.StatusOK, results)
 	})

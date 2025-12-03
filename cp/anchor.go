@@ -114,10 +114,11 @@ func submitAnchor(block LowerBlock) {
 
 // 검색 응답 구조체
 type SearchResponse struct {
-	Record ContentRecord `json:"record"`
-	Root   string        `json:"root"`
-	Leaf   string        `json:"leaf"`
-	Proof  [][2]string   `json:"proof"`
+	Record     ContentRecord `json:"record"`
+	BlockRoot  string        `json:"block_root"`
+	LatestRoot string        `json:"latest_root"`
+	Leaf       string        `json:"leaf"`
+	Proof      [][2]string   `json:"proof"`
 }
 
 // 쿼리 수행 함수
@@ -181,15 +182,13 @@ func buildSearchResponse(rec ContentRecord, blk *LowerBlock, entryIndex int) Sea
 	// 3) 검색된 레코드가 속한 블록을 기준으로 Merkle Proof 생성
 	proof := merkleProof(leafHashes, entryIndex)
 
-	// 4) 최신 블록의 Root 가져오기
-	latestRoot := getLatestRoot()
-
-	// 5) 최종 결과 패키징
+	// 4) 최종 결과 패키징
 	return SearchResponse{
-		Record: rec,
-		Root:   latestRoot,
-		Leaf:   leaf,
-		Proof:  proof,
+		Record:     rec,
+		BlockRoot:  blk.MerkleRoot,  // 레코드가 존재하는 블록 루트 (블록 유효성 검증)
+		LatestRoot: getLatestRoot(), // 현재 노드의 최신 블록 루트 (체인 유효성 검증)
+		Leaf:       leaf,
+		Proof:      proof,
 	}
 }
 
