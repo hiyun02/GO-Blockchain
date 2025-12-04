@@ -170,19 +170,13 @@ func findMatchesInBlock(blk *LowerBlock, keyword string) []Match {
 
 func buildSearchResponse(rec ContentRecord, blk *LowerBlock, entryIndex int) SearchResponse {
 
-	// 1) leaf hash = ContentRecord 해시
-	leaf := hashContentRecord(rec)
+	// 1) 찾은 블록에서 해당 엔트리에 대한 leaf hash 꺼냄
+	leaf := blk.LeafHashes[entryIndex]
 
-	// 2) 블록 전체 leaf hash 배열 생성
-	leafHashes := make([]string, len(blk.Entries))
-	for i, e := range blk.Entries {
-		leafHashes[i] = hashContentRecord(e)
-	}
+	// 2) 검색된 레코드가 속한 블록을 기준으로 Merkle Proof 생성
+	proof := merkleProof(blk.LeafHashes, entryIndex)
 
-	// 3) 검색된 레코드가 속한 블록을 기준으로 Merkle Proof 생성
-	proof := merkleProof(leafHashes, entryIndex)
-
-	// 4) 최종 결과 패키징
+	// 3) 최종 결과 패키징
 	return SearchResponse{
 		Record:     rec,
 		BlockRoot:  blk.MerkleRoot,  // 레코드가 존재하는 블록 루트 (블록 유효성 검증)

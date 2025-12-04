@@ -29,6 +29,7 @@ type LowerBlock struct {
 	Difficulty int             `json:"difficulty"`  // 난이도 (ex: 4 => "0000"으로 시작)
 	BlockHash  string          `json:"block_hash"`  // 블록 전체 해시 (헤더 기준)
 	Elapsed    float32         `json:"elapsed"`     // 채굴 소요 시간
+	LeafHashes []string        `json:"leaf_hashes"` // Merkle Proof 재현을 위한 해시값 모음
 }
 
 // 제네시스 블록 생성

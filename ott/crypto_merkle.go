@@ -154,3 +154,15 @@ func merkleProof(leafHashes []string, idx int) [][2]string {
 
 	return proof
 }
+
+// 여러 CP 레코드 속 Merkle Root를 병합하여 상위 MerkleRoot 계산
+func computeUpperMerkleRoot(records []AnchorRecord) string {
+	if len(records) == 0 {
+		return ""
+	}
+	leaf := make([]string, len(records))
+	for i, rec := range records {
+		leaf[i] = rec.LowerRoot // CP 체인 루트 기반으로 상위 루트 계산
+	}
+	return merkleRootHex(leaf)
+}

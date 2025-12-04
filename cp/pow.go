@@ -32,10 +32,11 @@ type PoWHeader struct {
 
 // 채굴 성공 결과
 type MineResult struct {
-	BlockHash string
-	Nonce     int
-	Header    PoWHeader
-	Elapsed   float32
+	BlockHash  string
+	Nonce      int
+	Header     PoWHeader
+	Elapsed    float32
+	LeafHashes []string
 }
 
 // 채굴되지 않은 pending 을 감시해서 채굴 시작 신호 보내는 watcher
@@ -168,7 +169,7 @@ func mineBlock(difficulty int, entries []ContentRecord) MineResult {
 			mineEnd := time.Now()
 			elapsed := mineEnd.Sub(mineStart)
 			//isMining.Store(false) // nonce 찾기는 끝났지만, 아직 저장되지 않았으므로 플래그 변경하지 않음
-			return MineResult{BlockHash: hash, Nonce: nonce, Header: header, Elapsed: float32(elapsed.Seconds())}
+			return MineResult{BlockHash: hash, Nonce: nonce, Header: header, Elapsed: float32(elapsed.Seconds()), LeafHashes: leaf}
 		}
 		nonce++
 	}
@@ -184,6 +185,7 @@ func broadcastBlock(res MineResult, entries []ContentRecord) {
 		"entries":    entries,
 		"difficulty": GlobalDifficulty,
 		"elapsed":    res.Elapsed,
+		"leafHashes": res.LeafHashes,
 		"winner":     self,
 	})
 	// peerSnapshot은 자기자신을 포함하지 않으므로 추가
@@ -205,6 +207,7 @@ func receiveBlock(w http.ResponseWriter, r *http.Request) {
 		Entries    []ContentRecord `json:"entries"`
 		Difficulty int             `json:"difficulty"`
 		Elapsed    float32         `json:"elapsed"`
+		LeafHashes []string        `json:"leafHashes"`
 		Winner     string          `json:"winner"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&msg); err != nil {
@@ -230,7 +233,7 @@ func receiveBlock(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 체인에 추가
-	addBlockToChain(msg.Header, msg.Hash, msg.Elapsed, msg.Entries)
+	addBlockToChain(msg.Header, msg.Hash, msg.Elapsed, msg.Entries, msg.LeafHashes)
 	log.Printf("[PoW][CHAIN] Block accepted: index=%d hash=%s", msg.Header.Index, msg.Hash)
 	w.WriteHeader(http.StatusOK)
 
@@ -242,7 +245,7 @@ func receiveBlock(w http.ResponseWriter, r *http.Request) {
 }
 
 // 검증된 블록을 로컬 체인에 추가
-func addBlockToChain(header PoWHeader, hash string, elapsed float32, entries []ContentRecord) {
+func addBlockToChain(header PoWHeader, hash string, elapsed float32, entries []ContentRecord, leafHashes []string) {
 	block := LowerBlock{
 		Index:      header.Index,
 		CpID:       selfID(),
@@ -254,6 +257,7 @@ func addBlockToChain(header PoWHeader, hash string, elapsed float32, entries []C
 		Difficulty: header.Difficulty,
 		BlockHash:  hash,
 		Elapsed:    elapsed,
+		LeafHashes: leafHashes,
 	}
 	onBlockReceived(block)
 }
