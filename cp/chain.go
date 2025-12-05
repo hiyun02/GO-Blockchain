@@ -3,8 +3,6 @@ package main
 import (
 	"fmt"
 	"log"
-	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -83,37 +81,6 @@ func newLowerChain(cpID string) (*LowerChain, error) {
 	}
 
 	return ch, nil
-}
-
-// content_id로 머클 증명 생성
-// 반환: (레코드, 포함된 블록, 증명경로, 존재여부)
-func (ch *LowerChain) getContentWithProofIndexed(contentID string) (ContentRecord, LowerBlock, [][2]string, bool) {
-	// storage의 "cid_" 색인을 직접 읽어와 접근
-	ptrKey := "cid_" + contentID
-	ptrBytes, err := db.Get([]byte(ptrKey), nil)
-	if err != nil {
-		return ContentRecord{}, LowerBlock{}, nil, false
-	}
-	parts := strings.Split(string(ptrBytes), ":")
-	if len(parts) != 2 {
-		return ContentRecord{}, LowerBlock{}, nil, false
-	}
-	bi, err1 := strconv.Atoi(parts[0])
-	ei, err2 := strconv.Atoi(parts[1])
-	if err1 != nil || err2 != nil {
-		return ContentRecord{}, LowerBlock{}, nil, false
-	}
-	blk, err := getBlockByIndex(bi)
-	if err != nil || ei < 0 || ei >= len(blk.Entries) {
-		return ContentRecord{}, LowerBlock{}, nil, false
-	}
-	rec := blk.Entries[ei]
-	leaf := make([]string, len(blk.Entries))
-	for i, r := range blk.Entries {
-		leaf[i] = hashContentRecord(r)
-	}
-	proof := merkleProof(leaf, ei)
-	return rec, blk, proof, true
 }
 
 // 외부 블록 수신 -> 검증 및 체인 반영

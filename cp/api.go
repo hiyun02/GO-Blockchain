@@ -127,30 +127,6 @@ func RegisterAPI(mux *http.ServeMux, chain *LowerChain) {
 		})
 	})
 
-	// 머클 증명 제공 (색인 기반 즉시 접근)
-	// GET /proof?cid=<content_id>
-	mux.HandleFunc("/proof", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		cid := r.URL.Query().Get("cid")
-		if cid == "" {
-			http.Error(w, "missing query param: cid", http.StatusBadRequest)
-			return
-		}
-		rec, blk, proof, ok := chain.getContentWithProofIndexed(cid)
-		if !ok {
-			http.Error(w, "content not found", http.StatusNotFound)
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{
-			"record": rec,
-			"block":  blk,
-			"proof":  proof, // [][2]string { siblingHex, "L"/"R" }
-		})
-	})
-
 	// 노드 상태 확인
 	// GET /status : 헬스/높이/주소 리턴 (부트노드 선정에 사용)
 	mux.HandleFunc("/status", func(w http.ResponseWriter, r *http.Request) {

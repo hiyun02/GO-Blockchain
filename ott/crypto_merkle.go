@@ -8,9 +8,11 @@ import (
 	"sort"
 )
 
-// SHA-256 해시를 hex 문자열로 반환
-func sha256Hex(data []byte) string {
-	h := sha256.Sum256(data)
+// ----------------------------------------------------------------------
+// SHA256 헬퍼
+// ----------------------------------------------------------------------
+func sha256Hex(b []byte) string {
+	h := sha256.Sum256(b)
 	return hex.EncodeToString(h[:])
 }
 
@@ -42,127 +44,136 @@ func jsonCanonical(obj interface{}) []byte {
 	return out
 }
 
-// raw bytes 기반 표준 방식
-func merkleRootHex(leaves []string) string {
-	if len(leaves) == 0 {
-		return ""
-	}
-	// leaf들을 raw byte로 decode한 배열로 변환
-	var level [][]byte
-	for _, h := range leaves {
-		b, _ := hex.DecodeString(h)
-		level = append(level, b)
-	}
-
-	// 노드가 하나 남을 때까지 결합
-	for len(level) > 1 {
-		var next [][]byte
-
-		for i := 0; i < len(level); i += 2 {
-			if i+1 < len(level) {
-				// left + right
-				combined := append(level[i], level[i+1]...)
-				sum := sha256.Sum256(combined)
-				next = append(next, sum[:])
-			} else {
-				// odd → duplicate
-				combined := append(level[i], level[i]...)
-				sum := sha256.Sum256(combined)
-				next = append(next, sum[:])
-			}
-		}
-
-		level = next
-	}
-
-	return hex.EncodeToString(level[0])
-}
-
-// Merkle Proof 검증 : O(logN)
-func verifyMerkleProof(leafHex string, rootHex string, proof [][2]string) bool {
-	h, _ := hex.DecodeString(leafHex)
-	for _, p := range proof {
-		sib, _ := hex.DecodeString(p[0])
-		pos := p[1]
-		if pos == "L" {
-			sum := sha256.Sum256(append(sib, h...))
-			h = sum[:]
-		} else {
-			sum := sha256.Sum256(append(h, sib...))
-			h = sum[:]
-		}
-	}
-	return hex.EncodeToString(h) == rootHex
-}
-
-// ContentRecord 해시 생성 => CP 체인에서의 무결성 검증
+// ContentRecord 해시 생성 -> CP 체인에서의 무결성 검증
 func hashContentRecord(rec ContentRecord) string {
 	canonical := jsonCanonical(rec)
 	return sha256Hex(canonical)
 }
 
-// 표준 방식 raw bytes 기반
-// leafHashes = hex 인코딩된 leaf hash 문자열 배열
-// idx = 검색된 Leaf의 index
-func merkleProof(leafHashes []string, idx int) [][2]string {
-	if idx < 0 || idx >= len(leafHashes) {
+// ----------------------------------------------------------------------
+// 두 해시의 부모 해시 계산 (left + right 바이트 결합 후 SHA256)
+// CP/OTT 모두 이 방식만 사용해야 한다
+// ----------------------------------------------------------------------
+func pairHash(left, right string) string {
+	// hex 문자열 → raw bytes
+	lb, _ := hex.DecodeString(left)
+	rb, _ := hex.DecodeString(right)
+
+	// 바이트 단위로 정확히 이어붙이기
+	merged := append(lb, rb...)
+	return sha256Hex(merged)
+}
+
+// ----------------------------------------------------------------------
+// Merkle Root 계산
+// leaves: hex 문자열 배열 (leaf hash들)
+// ----------------------------------------------------------------------
+func merkleRootHex(leaves []string) string {
+	n := len(leaves)
+	if n == 0 {
+		return sha256Hex([]byte{}) // 빈 경우도 SHA256("")으로 통일
+	}
+	if n == 1 {
+		return leaves[0]
+	}
+
+	// 현재 레벨
+	level := make([]string, n)
+	copy(level, leaves)
+
+	// 레벨 단위로 반복
+	for len(level) > 1 {
+		// 홀수면 마지막 요소 복제
+		if len(level)%2 == 1 {
+			level = append(level, level[len(level)-1])
+		}
+
+		var newLevel []string
+		for i := 0; i < len(level); i += 2 {
+			left := level[i]
+			right := level[i+1]
+			parent := pairHash(left, right)
+			newLevel = append(newLevel, parent)
+		}
+		level = newLevel
+	}
+
+	return level[0]
+}
+
+// ----------------------------------------------------------------------
+// Merkle Proof 생성
+// proof = [][2]string { direction, sibling }
+// direction = "L" 또는 "R"
+// ----------------------------------------------------------------------
+func merkleProof(leaves []string, index int) [][2]string {
+	n := len(leaves)
+	if index < 0 || index >= n {
 		return nil
 	}
 
-	// 1) leaf hex들을 raw byte로 decode하여 level 구성
-	var level [][]byte
-	for _, h := range leafHashes {
-		b, _ := hex.DecodeString(h)
-		level = append(level, b)
-	}
+	// 레벨 복사
+	level := make([]string, n)
+	copy(level, leaves)
 
-	current := idx
-	var proof [][2]string
+	proof := make([][2]string, 0)
 
-	// 2) sibling들을 따라 올라가며 증명 생성
+	curIndex := index
+
+	// 루트에 도달할 때까지
 	for len(level) > 1 {
-		var next [][]byte
 
+		// 홀수 leaf padding
+		if len(level)%2 == 1 {
+			level = append(level, level[len(level)-1])
+		}
+
+		// 현재 레벨에서 sibling 구하기
+		var siblingIndex int
+		if curIndex%2 == 0 {
+			// 오른쪽 형제가 존재
+			siblingIndex = curIndex + 1
+			proof = append(proof, [2]string{"R", level[siblingIndex]})
+		} else {
+			// 왼쪽 형제
+			siblingIndex = curIndex - 1
+			proof = append(proof, [2]string{"L", level[siblingIndex]})
+		}
+
+		// 다음 레벨로 이동
+		var newLevel []string
 		for i := 0; i < len(level); i += 2 {
-			var parent []byte
-			if i+1 < len(level) {
-				combined := append(level[i], level[i+1]...)
-				sum := sha256.Sum256(combined)
-				parent = sum[:]
-			} else {
-				combined := append(level[i], level[i]...)
-				sum := sha256.Sum256(combined)
-				parent = sum[:]
-			}
-			next = append(next, parent)
+			left := level[i]
+			right := level[i+1]
+			parent := pairHash(left, right)
+			newLevel = append(newLevel, parent)
 		}
 
-		// 현재 index의 sibling 찾기
-		siblingIdx := current ^ 1
-		if siblingIdx < len(level) {
-			sibHex := hex.EncodeToString(level[siblingIdx])
-			if current%2 == 0 {
-				proof = append(proof, [2]string{sibHex, "R"})
-			} else {
-				proof = append(proof, [2]string{sibHex, "L"})
-			}
-		}
-
-		current = current / 2
-		level = next
+		level = newLevel
+		curIndex = curIndex / 2
 	}
 
 	return proof
 }
 
-// 여러 CP 레코드 속 Merkle Root를 병합하여 상위 MerkleRoot 계산
-func computeUpperMerkleRoot(records []AnchorRecord) string {
-	if len(records) == 0 {
-		return ""
+// ----------------------------------------------------------------------
+// Merkle Proof 검증
+// direction = "L" -> sibling이 왼쪽
+// direction = "R" -> sibling이 오른쪽
+// ----------------------------------------------------------------------
+func verifyMerkleProof(leaf string, proof [][2]string, root string) bool {
+	computed := leaf
+
+	for _, p := range proof {
+		dir := p[0]
+		sib := p[1]
+
+		if dir == "L" {
+			computed = pairHash(sib, computed)
+		} else {
+			computed = pairHash(computed, sib)
+		}
 	}
-	leaf := make([]string, len(records))
-	for i, rec := range records {
-		leaf[i] = rec.LowerRoot // CP 체인 루트 기반으로 상위 루트 계산
-	}
-	return merkleRootHex(leaf)
+
+	return computed == root
 }
