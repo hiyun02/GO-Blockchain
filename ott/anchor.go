@@ -199,7 +199,7 @@ func verifyCpResults(cpID string, items []SearchResponse) ([]SearchResponse, err
 		}
 
 		// 키워드가 포함된 블록의 Merkle 증명을 통한 유효성 검증
-		if verifyMerkleProof(it.Leaf, it.BlockRoot, it.Proof) {
+		if verifyMerkleProof(it.Leaf, it.Proof, it.BlockRoot) {
 			verified = append(verified, it)
 			logInfo("[QUERY][SUCCESS] Verified Record Appended")
 		}
