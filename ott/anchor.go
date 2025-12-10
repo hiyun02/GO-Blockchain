@@ -77,8 +77,6 @@ func addAnchor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 앵커 저장
-	log.Printf("[ANCHOR] Verified & adding anchor from CP Chain ... %s : %s)", req.CpID, req.Root)
 	// AnchorRecord 구성 (계약 정보는 현재 비워둠)
 	ar := AnchorRecord{
 		CPID:             req.CpID,
@@ -103,6 +101,9 @@ func addAnchor(w http.ResponseWriter, r *http.Request) {
 	anchorMu.Lock()
 	anchorMap[req.CpID] = AnchorInfo{Root: req.Root, Ts: req.Ts}
 	anchorMu.Unlock()
+
+	// 앵커 저장
+	log.Printf("[ANCHOR] Verified & adding anchor from CP Chain ... %s : %s)", req.CpID, anchorMap[req.CpID].Root)
 
 	// 새로 수신한 CP 부트노드의 주소가, 기존 Cp체인의 부트노드 주소와 다른 경우
 	if req.CpBoot != getCpBootAddr(req.CpID) {
@@ -193,6 +194,7 @@ func verifyCpResults(cpID string, items []SearchResponse) ([]SearchResponse, err
 		// 최신 블록 root 일치 여부
 		if it.LatestRoot != anchorRoot {
 			logInfo("[QUERY][ERROR] Anchor Root Mismatch")
+			logInfo("[QUERY][ERROR] Latest=%s Anchor=%s", it.LatestRoot[:10], anchorRoot[:10])
 			continue
 		} else {
 			logInfo("[QUERY] Success to Latest Anchor Verification ")
