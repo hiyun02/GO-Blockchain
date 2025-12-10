@@ -11,7 +11,7 @@
 </head>
 <body>
 
-<h1>OTT 체인 블록 목록</h1>
+<h1>OTT 체인 전체보기</h1>
 
 <div id="status"></div>
 
@@ -27,12 +27,19 @@
     fetch('/status')
         .then(r => r.json())
         .then(s => {
+
+            let cpBootStr = Object.entries(s.cp_boot || {})
+                .map(([k,v]) => `${k}=${v}`).join(', ');
+
             document.getElementById('status').innerHTML = `
       <h3>노드 상태</h3>
       <p>주소: ${s.addr}</p>
       <p>높이: ${s.height}</p>
       <p>부트노드 여부: ${s.is_boot}</p>
+      <p>부트노드 주소: ${s.bootAddr}/</p>
       <p>시작 시간: ${s.started_at}</p>
+      <p>PoW 채굴 난이도: ${s.difficulty}</p>
+      <p>CP Boot: ${cpBootStr}</p>
       <p>Peers: ${s.peers.join(', ')}</p>
     `;
         });
