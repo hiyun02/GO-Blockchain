@@ -34,7 +34,7 @@ func ensureKeyPair() {
 	}
 
 	priv, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	privBytes, _ := x509.MarshalEHosrivateKey(priv)
+	privBytes, _ := x509.MarshalECPrivateKey(priv)
 	pubBytes, _ := x509.MarshalPKIXPublicKey(&priv.PublicKey)
 
 	privPem := string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: privBytes}))
@@ -62,7 +62,7 @@ func getPublicKey(w http.ResponseWriter, r *http.Request) {
 // 앵커 서명 생성 (ECDSA)
 func makeAnchorSignature(privPem string, root string, ts string) string {
 	block, _ := pem.Decode([]byte(privPem))
-	priv, _ := x509.ParseEHosrivateKey(block.Bytes)
+	priv, _ := x509.ParseECPrivateKey(block.Bytes)
 
 	// 메시지는 문자열 그대로 사용
 	msg := []byte(root + "|" + ts)

@@ -16,7 +16,7 @@ import (
 // LevelDB Storage (Hos 하부체인용)
 // ----------------------------------------------------------------------------
 // - 블록 저장: 번호/해시 두 축으로 JSON 저장
-// - 콘텐츠 색인: cid/fp/info 기반 → "<blockIndex>:<entryIndex>" 포인터 저장
+// - 콘텐츠 색인: cid/pc/info 기반 -> "<blockIndex>:<entryIndex>" 포인터 저장
 //   (이전처럼 block_hash만 저장하면 재시작 후 entry 위치를 다시 스캔해야 해서 비효율)
 // - 추가 메타: 최신 루트 캐시 등은 선택
 ////////////////////////////////////////////////////////////////////////////////
@@ -140,7 +140,7 @@ func getLatestRoot() string {
 
 ////////////////////////////////////////////////////////////////////////////////
 // 해시테이블(검색 인덱스) 업데이트
-//  - 블록 단위로 cid/fp/info 색인을 "<blockIndex>:<entryIndex>" 포인터로 저장
+//  - 블록 단위로 cid/pc/info 색인을 "<blockIndex>:<entryIndex>" 포인터로 저장
 ////////////////////////////////////////////////////////////////////////////////
 
 func updateIndicesForBlock(block LowerBlock) error {
@@ -156,10 +156,10 @@ func updateIndicesForBlock(block LowerBlock) error {
 			}
 		}
 
-		// 2) Fingerprint 색인: "fp_<Fingerprint>" -> "bi:ei"
-		if entry.Fingerprint != "" {
-			keyByFP := fmt.Sprintf("fp_%s", entry.Fingerprint)
-			if err := db.Put([]byte(keyByFP), ptr(block.Index, ei), nil); err != nil {
+		// 2) PrescCode 색인: "pc_<PrescCode>" -> "bi:ei"
+		if entry.PrescCode != "" {
+			keyByPC := fmt.Sprintf("pc_%s", entry.PrescCode)
+			if err := db.Put([]byte(keyByPC), ptr(block.Index, ei), nil); err != nil {
 				return err
 			}
 		}
@@ -200,7 +200,7 @@ func parsePtr(s string) (int, int, bool) {
 }
 
 // 키워드로 블록 조회(단순 버전)
-//   - keyword가 ClinicID, Fingerprint, 또는 Info(title 등)에 매칭되면
+//   - keyword가 ClinicID, PrescCode, 또는 Info에 매칭되면
 //     해당 포인터("bi:ei")를 통해 블록을 찾아 반환
 //   - 여러 매칭이 가능할 수 있으나, 여기서는 최초 매칭 1개만 반환(간단화)
 func getBlockByClinic(keyword string) (LowerBlock, error) {
@@ -211,15 +211,15 @@ func getBlockByClinic(keyword string) (LowerBlock, error) {
 		}
 	}
 
-	// Fingerprint 색인 조회
-	if v, err := db.Get([]byte("fp_"+keyword), nil); err == nil {
+	// PrescCode 색인 조회
+	if v, err := db.Get([]byte("pc_"+keyword), nil); err == nil {
 		if bi, _, ok := parsePtr(string(v)); ok {
 			return getBlockByIndex(bi)
 		}
 	}
 
 	// Info(title 등) 색인 조회 (소문자 normalize)
-	if v, err := db.Get([]byte("info_title_"+strings.ToLower(keyword)), nil); err == nil {
+	if v, err := db.Get([]byte("info_cCode_"+strings.ToLower(keyword)), nil); err == nil {
 		if bi, _, ok := parsePtr(string(v)); ok {
 			return getBlockByIndex(bi)
 		}

@@ -76,7 +76,7 @@ func RegisterAPI(mux *http.ServeMux, chain *LowerChain) {
 		writeJSON(w, http.StatusOK, blk)
 	})
 
-	// 키워드로 레코드 검색(정확 일치: cid/fp/info_title)
+	// 키워드로 레코드 검색(정확 일치: cid/pc/info_title)
 	// GET /search?value=<keyword>
 	mux.HandleFunc("/search", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
