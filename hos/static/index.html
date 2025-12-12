@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Blockchain Explorer</title>
+    <style>
+        body { font-family: Arial; margin: 20px; }
+        .block { padding:10px; margin:10px 0; border:1px solid #ddd; }
+        .title { font-weight:bold; }
+        a { text-decoration:none; }
+    </style>
+</head>
+<body>
+
+<h1>📦 Hos 체인 전체조회</h1>
+
+<div id="status"></div>
+<div id="peers"></div>
+
+<hr>
+
+<h2>블록 목록</h2>
+<div id="blocks"></div>
+
+<hr>
+
+<button onclick="location.href='/upload.html'">🚀 채굴 시작하기</button>
+
+<script>
+    // -----------------------
+    // 노드 상태
+    // -----------------------
+    fetch('/status')
+        .then(res => res.json())
+        .then(d => {
+            document.getElementById('status').innerHTML = `
+      <h2>노드 상태</h2>
+      <p>주소: ${d.addr}</p>
+      <p>높이(height): ${d.height}</p>
+      <p>부트노드 여부: ${d.is_boot}</p>
+      <p>부트노드 주소: ${d.bootAddr}</p>
+      <p>시작 시간: ${d.started_at}</p>
+      <p>PoW 채굴 난이도: ${d.difficulty}</p>
+      <p>Gov 부트노드 주소: ${d.gov_boot}</p>
+    `;
+        });
+
+    // -----------------------
+    // Peers 목록
+    // -----------------------
+    fetch('/peers')
+        .then(res => res.json())
+        .then(list => {
+            document.getElementById('peers').innerHTML =
+                "<h2>Peers</h2>" +
+                list.map(p => `<p>${p}</p>`).join("");
+        });
+
+    // -----------------------
+    // 블록 리스트
+    // -----------------------
+    fetch('/blocks?offset=0&limit=100')
+        .then(res => res.json())
+        .then(d => {
+            const html = d.items.map(b => `
+      <div class="block">
+        <div class="title">
+          <a href="/detail.html?id=${b.index}">
+            Block #${b.index}
+          </a>
+        </div>
+        <p>Timestamp: ${b.timestamp}</p>
+        <p>Entries: ${b.entries ? b.entries.length : 0}</p>
+        <p>Hash: ${b.block_hash}</p>
+      </div>
+    `).join("");
+
+            document.getElementById('blocks').innerHTML = html;
+        });
+</script>
+
+</body>
+</html>
