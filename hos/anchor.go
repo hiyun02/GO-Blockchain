@@ -158,8 +158,8 @@ func findMatchesInBlock(blk *LowerBlock, keyword string) []Match {
 			matches = append(matches, Match{rec, ei})
 			continue
 		}
-		if title, ok := rec.Info["title"]; ok {
-			if strings.EqualFold(fmt.Sprint(title), keyword) {
+		if cCode, ok := rec.Info["cCode"]; ok {
+			if strings.EqualFold(fmt.Sprint(cCode), keyword) {
 				matches = append(matches, Match{rec, ei})
 			}
 		}
@@ -187,13 +187,13 @@ func buildSearchResponse(rec ClinicRecord, blk *LowerBlock, entryIndex int) Sear
 }
 
 // 키워드로 블록 조회
-//   - keyword가 Info(title 등)에 매칭되면
+//   - keyword가 Info(cCode 등)에 매칭되면
 //     해당 포인터("bi:ei")를 통해 블록을 찾아 반환
 //   - 여러 매칭이 가능할 수 있으나, 여기서는 최초 매칭 1개만 반환
 func getBlockByClinicForQuery(keyword string) (*LowerBlock, error) {
 
-	// Info(title 등) 색인 조회 (소문자 normalize)
-	if v, err := db.Get([]byte("info_title_"+strings.ToLower(keyword)), nil); err == nil {
+	// Info(cCode 등) 색인 조회 (소문자 normalize)
+	if v, err := db.Get([]byte("info_cCode_"+strings.ToLower(keyword)), nil); err == nil {
 		if bi, _, ok := parsePtr(string(v)); ok {
 			return getBlockByIndexForPointer(bi)
 		}

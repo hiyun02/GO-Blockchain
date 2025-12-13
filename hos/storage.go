@@ -166,7 +166,7 @@ func updateIndicesForBlock(block LowerBlock) error {
 
 		// 3) Info 키워드 색인(간단 버전)
 		//    - 점 표기(dotted key)나 부분일치는 API 레이어에서 확장 가능
-		//    - 여기서는 title 같은 문자열을 소문자로 normalize해서 저장
+		//    - 여기서는 cCode 같은 문자열을 소문자로 normalize해서 저장
 		for k, v := range entry.Info {
 			strVal := strings.TrimSpace(fmt.Sprintf("%v", v))
 			if strVal == "" {
