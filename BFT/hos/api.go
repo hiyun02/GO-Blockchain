@@ -76,7 +76,7 @@ func RegisterAPI(mux *http.ServeMux, chain *LowerChain) {
 		writeJSON(w, http.StatusOK, blk)
 	})
 
-	// 키워드로 레코드 검색(정확 일치: cid/pc/info_cCode)
+	// 키워드로 레코드 검색
 	// GET /search?value=<keyword>
 	mux.HandleFunc("/search", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -119,11 +119,10 @@ func RegisterAPI(mux *http.ServeMux, chain *LowerChain) {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
-			"total":      total,
-			"offset":     offset,
-			"limit":      limit,
-			"items":      blocks,
-			"difficulty": GlobalDifficulty,
+			"total":  total,
+			"offset": offset,
+			"limit":  limit,
+			"items":  blocks,
 		})
 	})
 
@@ -131,9 +130,9 @@ func RegisterAPI(mux *http.ServeMux, chain *LowerChain) {
 	// GET /status : 헬스/높이/주소 리턴 (부트노드 선정에 사용)
 	mux.HandleFunc("/status", func(w http.ResponseWriter, r *http.Request) {
 		chainMu.Lock()
-		h, _ := getLatestHeight()
+		height, _ := getLatestHeight()
 		lastHash := ""
-		lb, err := getBlockByIndex(h)
+		lb, err := getBlockByIndex(height)
 		if err != nil {
 			log.Printf("[P2P] Block Hash Not Found")
 		} else {
@@ -143,12 +142,12 @@ func RegisterAPI(mux *http.ServeMux, chain *LowerChain) {
 
 		writeJSON(w, http.StatusOK, map[string]any{
 			"addr":       self,
-			"height":     h,
+			"height":     height,
+			"proposer":   proposer,
 			"is_boot":    isBoot.Load(),
 			"bootAddr":   boot,
 			"started_at": startedAt.Format(time.RFC3339),
 			"peers":      peersSnapshot(),
-			"difficulty": GlobalDifficulty,
 			"Gov_boot":   getGovBoot(),
 			"last_hash":  lastHash,
 		})
@@ -161,9 +160,9 @@ func RegisterAPI(mux *http.ServeMux, chain *LowerChain) {
 		_ = json.NewEncoder(w).Encode(peersSnapshot()) // 비어있어도 "[]" 반환
 	})
 
-	// 채굴 요청을 받아 메모리풀에 저장시킴
-	// POST /mine
-	mux.HandleFunc("/mine", func(w http.ResponseWriter, r *http.Request) {
+	// 데이터 업로드 요청을 받아 메모리풀에 저장시킴
+	// POST /upload
+	mux.HandleFunc("/upload", func(w http.ResponseWriter, r *http.Request) {
 		var rec []ClinicRecord
 		if err := json.NewDecoder(r.Body).Decode(&rec); err != nil {
 			http.Error(w, "invalid Clinic record", http.StatusBadRequest)
@@ -175,7 +174,7 @@ func RegisterAPI(mux *http.ServeMux, chain *LowerChain) {
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
-			"status": "Mining Request Submitted",
+			"status": "Uploading Request Submitted",
 			"count":  len(rec),
 		})
 	})
