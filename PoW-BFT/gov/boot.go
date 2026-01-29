@@ -1,8 +1,8 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
+	"io"
 	"log"
 	"net/http"
 	"strings"
@@ -15,13 +15,11 @@ import (
 // 부트노드가 신규 노드의 주소를 등록하고,
 // 신규 노드에게 현재 피어 목록을 제공함
 type registerReq struct {
-	GovID string `json:"gov_id"`
 	Addr  string `json:"addr"` // "host:port" 또는 "컨테이너명:포트"
-	PubKey string `json:"pub_key"` // 신규 노드의 공개키
+	GovID string `json:"gov_id"`
 }
 type registerResp struct {
 	Peers []string `json:"peers"`
-	PeerKeys map[string]string `json:"peer_keys"`
 }
 
 // 신규노드가 네트워크 진입 시 부트노드가 다른 노드들의 주소를 제공하는 함수
@@ -44,73 +42,83 @@ func registerPeer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 신규 노드 등록
-	peerMu.Lock()
-	pkMu.Lock()
+	// 부트노드 로컬 peers에 추가
+	peerMu.Lock() // 동시 접근 막음
+	// 이미 등록된 주소인지 검증
+	already := checkAddress(req.Addr)
+
 	// 등록된 주소가 아니라면 추가
-	if !addressYN(req.Addr) {
+	if !already {
 		peers = append(peers, req.Addr)
-		log.Printf("[P2P][REGISTER] new peer joined: %s (hos_id=%s) | total=%d", req.Addr, req.GovID, len(peers))
+		log.Printf("[P2P][REGISTER] new peer joined: %s (Gov_id=%s) | total=%d", req.Addr, req.GovID, len(peers))
+	} else {
+		log.Printf("[P2P][REGISTER] peer already exists: %s", req.Addr)
 	}
-	peerPubKeys[req.Addr] = req.PubKey
-
-	outPeers := make([]string, 0)
-	outKeys := make(map[string]string)
-
-	// 부트노드 자신의 정보도 포함시킴
-	myPubKey, _ := getMeta("meta_hos_pubkey")
-	outPeers = append(outPeers, self)
-	outKeys[self] = myPubKey
-
-	for addr, key := range peerPubKeys {
-		if addr != req.Addr {
-			outPeers = append(outPeers, addr)
-			outKeys[addr] = key
-		}
-	}
-	pkMu.Unlock()
-	peerMu.Unlock()
 
 	// 신규 노드는 peerAliveMap에 초기 상태 초기화
 	markAlive(req.Addr, true)
 
-	// 기존 피어들에게 새로운 노드의 주소와 공개키를 넘김
-	go notifyNewPeerWithKey(req.Addr, req.PubKey)
-
-	// 현재까지 등록된 모든 노드의 공개키 맵을 반환
-	resp := registerResp{
-		Peers:    outPeers,
-		PeerKeys: outKeys,
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
-}
-
-
-// 기존 노드들에게 신규 노드의 주소와 공개키를 전파
-func notifyNewPeerWithKey(newAddr, newPubKey string) {
-	peerList := peersSnapshot()
-	for _, p := range peerList {
-		if p == newAddr || p == self {
-			continue
+	// 응답으로 넘겨줄 피어목록을 만듦 (자기 자신은 제외)
+	out := make([]string, 0, len(peers))
+	for _, p := range peers {
+		if p != req.Addr {
+			out = append(out, p)
 		}
-		go func(dst string) {
-			body, _ := json.Marshal(map[string]string{
-				"addr":    newAddr,
-				"pub_key": newPubKey,
-			})
-			_, err := http.Post("http://"+dst+"/addPeer", "application/json", bytes.NewReader(body))
-			if err != nil {
-				log.Printf("[BOOT] Failed to notify %s about new peer", dst)
-			}
-		}(p)
 	}
+	peerMu.Unlock()
+
+	// 기존 피어들에게도 새 피어 알려주기(비동기)
+	go func(newPeer string, others []string) {
+		log.Printf("[P2P][REGISTER] notifying %d peers about %s", len(others), newPeer)
+		b, _ := json.Marshal(newPeer)
+		for _, op := range others {
+			resp, err := http.Post("http://"+op+"/addPeer", "application/json", strings.NewReader(string(b)))
+			if err != nil {
+				log.Printf("[P2P][REGISTER] notify failed to %s: %v", op, err)
+				continue
+			}
+			io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+			log.Printf("[P2P][REGISTER] notified %s (status=%d)", op, resp.StatusCode)
+		}
+	}(req.Addr, out)
+
+	// 신규 노드에게 현재 피어 목록을 응답
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(registerResp{Peers: out})
 }
 
 // ============================================
 // 부트노드 상태 관리 소스
 // ============================================
+
+// 노드 상태 구조체, /status API 호출 시 응답받는 JSON 구조
+type nodeStatus struct {
+	Addr     string   `json:"addr"`      // 노드 주소
+	Height   int      `json:"height"`    // 블록 높이 (체인 진행 정도)
+	IsBoot   bool     `json:"is_boot"`   // 부트노드 여부
+	Peers    []string `json:"peers"`     // 연결된 피어 목록
+	LastHash string   `json:"last_hash"` // 최신 블록의 해시
+}
+
+// 다른 노드 상태 조회
+// 주어진 노드 주소(addr)에 HTTP GET 요청을 보내 /status API를 호출하고,
+// 해당 노드의 현재 상태(nodeStatus)를 가져옴
+func probeStatus(addr string) (nodeStatus, bool) {
+	var s nodeStatus
+	resp, err := http.Get("http://" + addr + "/status")
+	if err != nil {
+		return s, false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return s, false
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&s); err != nil {
+		return s, false
+	}
+	return s, true
+}
 
 // 부트노드 선출 및 전환
 // 네트워크 상의 모든 노드(peers + self)를 조사

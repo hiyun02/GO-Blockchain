@@ -40,16 +40,15 @@ func main() {
 	RegisterAPI(mux, chain)
 	// 노드 간 통신 엔드포인트 등록
 	//     - /addPeer : 기존 노드들이 신규 노드를 추가
-	//	   - /bft/start : 노드 간 채굴 요청 전파
-	//     - /bft/prepare : 다른 노드가 보낸 확정 블록 수신
+	//	   - /mine/start : 노드 간 채굴 요청 전파
+	//     - /receiveBlock : 다른 노드가 보낸 확정 블록 수신
 	//	   - /register : 부트노드가 신규노드를 네트워크에 참여시킴
 	//	   - /bootNotify : 부트노드 변경 수신
 	//	   - /addAnchor : Hos 체인으로부터 Anchor 수신, 해당 Hos의 부트노드 주소를 다른 Gov 노드에 전파
 	//	   - /hosBootNotify : Gov 부트노드로부터 전파된 Hos 부트노드 주소를 수신
 	mux.HandleFunc("/addPeer", addPeer)
-	mux.HandleFunc("/bft/start", handleBftStart)
-	mux.HandleFunc("/bft/prepare", handleReceivePrepare)
-	mux.HandleFunc("/bft/commit", handleReceiveCommit)
+	mux.HandleFunc("/mine/start", handleMineStart)
+	mux.HandleFunc("/receiveBlock", receiveBlock)
 	mux.HandleFunc("/register", registerPeer)
 	mux.HandleFunc("/bootNotify", bootNotify)
 	mux.HandleFunc("/addAnchor", addAnchor)
@@ -57,10 +56,7 @@ func main() {
 
 	mux.Handle("/", http.FileServer(http.Dir("./static")))
 
-	// 5) 앵커 서명을 위한 key pair 생성
-	ensureKeyPair()
-
-	// 6) 서버 시작
+	// 5) 서버 시작
 	go func() {
 		log.Println("[START] NODE Running on", addr)
 		if err := http.ListenAndServe(addr, mux); err != nil {
@@ -68,20 +64,10 @@ func main() {
 		}
 	}()
 
-	// 7) 자동 부트스트랩
+	// 6) 자동 부트스트랩
 	//  부트노드가 아니라면 부트노드에 자신의 주소를 등록 -> 부트노드로부터 노드 주소 목록 받아 등록 -> 체인 동기화
 	if boot != "" && self != "" && boot != self {
-		// 내 공개키를 meta에서 가져옴
-		myPubKey, ok := getMeta("meta_gov_pubkey")
-		if !ok {
-			log.Fatal("[BOOT] Public key not found in meta. Check ensureKeyPair.")
-		}
-
-		payload := map[string]string{
-			"gov_id":  govID,
-			"addr":    self,
-			"pub_key": myPubKey,
-		}
+		payload := map[string]string{"addr": self, "gov_id": govID}
 		b, _ := json.Marshal(payload)
 
 		resp, err := http.Post("http://"+boot+"/register", "application/json", strings.NewReader(string(b)))
@@ -99,8 +85,7 @@ func main() {
 		} else {
 
 			var reg struct {
-				Peers    []string          `json:"peers"`
-				PeerKeys map[string]string `json:"peer_keys"`
+				Peers []string `json:"peers"`
 			}
 			if err := json.NewDecoder(resp.Body).Decode(&reg); err != nil {
 				log.Printf("[BOOT] decode peers failed: %v", err)
@@ -108,9 +93,10 @@ func main() {
 			}
 			log.Printf("[BOOT-JOIN] received %d peers from %s: %v", len(reg.Peers), boot, reg.Peers)
 
-			// 수신된 명단을 순회하며 주소와 공개키를 함께 저장
-			for addr, pubKey := range reg.PeerKeys {
-				addPeerInternal(addr, pubKey)
+			// 부트노드와 부트노드에게 받은 노드 주소들을 peers 객체에 추가함
+			addPeerInternal(boot)
+			for _, addr := range reg.Peers {
+				addPeerInternal(addr)
 			}
 
 			// 초기 체인 동기화(부트노드로부터)
@@ -129,7 +115,7 @@ func main() {
 	}()
 
 	go func() {
-		log.Printf("[WATCHER] starting unified mining watcher (%ds interval)", ConsWatcherTime)
+		log.Printf("[WATCHER] starting unified mining watcher (%ds interval)", MiningWatcherTime)
 		startMiningWatcher()
 	}()
 	//

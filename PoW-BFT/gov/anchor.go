@@ -2,8 +2,6 @@ package main
 
 import (
 	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/asn1"
@@ -17,26 +15,6 @@ import (
 	"net/http"
 	"net/url"
 )
-
-// 개인키, 공개키 자동 생성 (최초 실행 시)
-func ensureKeyPair() {
-	if _, ok := getMeta("meta_gov_privkey"); ok {
-		return
-	}
-
-	priv, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	privBytes, _ := x509.MarshalECPrivateKey(priv)
-	pubBytes, _ := x509.MarshalPKIXPublicKey(&priv.PublicKey)
-
-	privPem := string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: privBytes}))
-	pubPem := string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: pubBytes}))
-
-	putMeta("meta_gov_privkey", privPem)
-	putMeta("meta_gov_pubkey", pubPem)
-	log.Println("[ANCHOR][INIT] Generated private key : %s", privPem)
-	log.Println("[ANCHOR][INIT] Generated public key : %s", pubPem)
-	log.Println("[ANCHOR][INIT] Generated ECDSA key pair for Hos node")
-}
 
 // Gov에서 Hos가 제출한 앵커를 수신하고 검증한 후 pending 추가함수 호출(부트노드만 수행)
 func addAnchor(w http.ResponseWriter, r *http.Request) {
@@ -197,7 +175,7 @@ func requestHosSearch(hosAddr, keyword string) ([]SearchResponse, error) {
 	return items, nil
 }
 
-// Gov -> Hos 검색 결과 검증
+// Gov -> CP 검색 결과 검증
 func verifyHosResults(hosID string, items []SearchResponse) ([]SearchResponse, error) {
 	// 1) Gov가 저장한 최신 AnchorRoot 조회
 	anchorMu.RLock()
@@ -229,40 +207,4 @@ func verifyHosResults(hosID string, items []SearchResponse) ([]SearchResponse, e
 		}
 	}
 	return verified, nil
-}
-
-// 서명 검증 로직
-func verifyECDSA(pubPemStr string, hash []byte, sigHex string) bool {
-	if pubPemStr == "" {
-		return false
-	}
-
-	block, _ := pem.Decode([]byte(pubPemStr))
-	if block == nil {
-		return false
-	}
-
-	pubIfc, err := x509.ParsePKIXPublicKey(block.Bytes)
-	if err != nil {
-		return false
-	}
-	pubKey, ok := pubIfc.(*ecdsa.PublicKey)
-	if !ok {
-		return false
-	}
-
-	sigBytes, err := hex.DecodeString(sigHex)
-	if err != nil {
-		return false
-	}
-
-	var sigStruct struct {
-		R, S *big.Int
-	}
-	_, err = asn1.Unmarshal(sigBytes, &sigStruct)
-	if err != nil {
-		return false
-	}
-
-	return ecdsa.Verify(pubKey, hash, sigStruct.R, sigStruct.S)
 }

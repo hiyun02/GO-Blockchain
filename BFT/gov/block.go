@@ -3,7 +3,6 @@ package main
 import (
 	"log"
 	"strings"
-	"time"
 )
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -23,84 +22,53 @@ type UpperBlock struct {
 	Timestamp  string         `json:"timestamp"`   // 생성 시간 (RFC3339 형식)
 	Records    []AnchorRecord `json:"records"`     // Hos 체인에서 제출한 AnchorRecord 목록
 	MerkleRoot string         `json:"merkle_root"` // AnchorRecords 속 MerkleRoot들을 병합하여 계산한 상위 MerkleRoot
-	Nonce      int            `json:"nonce"`       // PoW용 Nonce
-	Difficulty int            `json:"difficulty"`  // 난이도
+	Proposer   string         `json:"proposer"`    // 해당 블록의 합의 집행자
+	Signatures []string       `json:"signatures"`  // 2f+1개 이상의 노드 서명 목록 (합의 증거)
 	BlockHash  string         `json:"block_hash"`  // 블록 전체 해시
 	Elapsed    float32        `json:"elapsed"`     // 채굴 소요 시간
 }
 
 // 제네시스 블록 생성
-func mineGenesisBlock(govID string) UpperBlock {
-	log.Printf("[PoW] Mining genesis block...")
-	mineStart := time.Now()
-	// 제네시스는 엔트리 없음, merkleRoot는 sha256("")
-	merkleRoot := sha256Hex([]byte{})
-	prevHash := strings.Repeat("0", 64)
-	timestamp := "2025-11-26T01:07:18Z"
-	index := 0
+func createGenesisBlock(govID string) UpperBlock {
+	log.Printf("[Blk] Start genesis block...") //
 
-	header := PoWHeader{
-		Index:      index,
-		PrevHash:   prevHash,
-		MerkleRoot: merkleRoot,
-		Timestamp:  timestamp,
-		Difficulty: GlobalDifficulty,
-	}
-
-	// === 제네시스 Nonce 탐색 ===
-	nonce := 0
-	var hash string
-
-	for {
-		header.Nonce = nonce
-		hash = computeHashForPoW(header)
-		if validHash(hash, GlobalDifficulty) {
-			log.Printf("[PoW] GENESIS mined: nonce=%d hash=%s", nonce, hash)
-			break
-		}
-		nonce++
-	}
-	mineEnd := time.Now()
-	elapsed := float32(mineEnd.Sub(mineStart).Seconds())
-	// === UpperBlock으로 변환 ===
 	genesis := UpperBlock{
-		Index:      index,
-		GovID:      govID,
-		PrevHash:   prevHash,
-		Timestamp:  header.Timestamp,
-		Records:    []AnchorRecord{}, // Genesis는 Records 없음
-		MerkleRoot: merkleRoot,
-		Nonce:      header.Nonce,
-		Difficulty: GlobalDifficulty,
-		BlockHash:  hash,
-		Elapsed:    elapsed,
+		Index:      0,                       //
+		GovID:      govID,                   //
+		PrevHash:   strings.Repeat("0", 64), //
+		Timestamp:  "2026-01-24T01:07:18Z",  // 실험 데이터 일관성 유지
+		Records:    []AnchorRecord{},        //
+		MerkleRoot: "",                      //
+		Proposer:   "SYSTEM",                //
+		Signatures: []string{},              //
+		Elapsed:    0,                       //
 	}
-	// 난이도 조정 수행
-	adjustDifficulty(0, elapsed)
+
+	genesis.BlockHash = genesis.computeHash()  //
+	log.Printf("[Blk] Start genesis block...") //
+
 	return genesis
 }
 
-// UpperBlock 해시 계산 (헤더 서브셋 기준)
-// ------------------------------------------------------------
-// - 포함: Index, GovID, PrevHash, Timestamp, MerkleRoot, Nonce, Difficulty
-// - 제외: Records, BlockHash (자가참조 및 가변 데이터 배제)
+// 블록의 식별자인 Hash 값 계산 (Hos의 computeHash와 완벽 호환)
 func (b UpperBlock) computeHash() string {
+	// 해시에 포함할 헤더 필드 정의 (Hos 구조와 동일)
 	hdr := struct {
 		Index      int    `json:"index"`
 		GovID      string `json:"gov_id"`
 		PrevHash   string `json:"prev_hash"`
 		Timestamp  string `json:"timestamp"`
 		MerkleRoot string `json:"merkle_root"`
-		Nonce      int    `json:"nonce"`
-		Difficulty int    `json:"difficulty"`
+		Proposer   string `json:"proposer"`
 	}{
-		Index:      b.Index,
-		GovID:      b.GovID,
-		PrevHash:   b.PrevHash,
-		Timestamp:  b.Timestamp,
-		MerkleRoot: b.MerkleRoot,
-		Nonce:      b.Nonce,
-		Difficulty: b.Difficulty,
+		Index:      b.Index,      //
+		GovID:      b.GovID,      //
+		PrevHash:   b.PrevHash,   //
+		Timestamp:  b.Timestamp,  //
+		MerkleRoot: b.MerkleRoot, //
+		Proposer:   b.Proposer,   //
 	}
-	return sha256Hex(jsonCanonical(hdr))
+
+	// Hos 체인과 동일한 sha256Hex 및 jsonCanonical 메커니즘 사용
+	return sha256Hex(jsonCanonical(hdr)) //
 }

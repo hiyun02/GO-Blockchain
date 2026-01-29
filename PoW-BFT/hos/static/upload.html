@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Start Mining</title>
+</head>
+<body>
+
+<h1>진료 정보</h1>
+
+<p>채굴할 진료 정보를 입력하세요.</p>
+
+<textarea id="json" rows="15" cols="70">
+{
+  "clinic_id": "VID-00001",
+  "info": {"title":"Demo","region":"KR"},
+  "fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "storage_addr": "s3://bucket/a.mp4",
+  "drm": null,
+  "timestamp": "2025-11-17T01:15:44Z"
+}
+</textarea>
+<br><br>
+
+<button onclick="mine()">채굴 시작</button>
+
+<pre id="out"></pre>
+
+<script>
+    function mine() {
+        const body = document.getElementById('json').value;
+
+        fetch('/mine', {
+            method: 'POST',
+            headers: { "Content-Type": "application/json" },
+            body: body
+        })
+            .then(r => r.json())
+            .then(d => {
+                document.getElementById('out').innerText = JSON.stringify(d, null, 2);
+            });
+    }
+</script>
+
+
+</body>
+</html>

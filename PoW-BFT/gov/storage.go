@@ -13,12 +13,12 @@ import (
 )
 
 ////////////////////////////////////////////////////////////////////////////////
-// LevelDB Storage (Hos 하부체인용)
+// LevelDB Storage for Gov Chain
 // ----------------------------------------------------------------------------
-// - 블록 저장: 번호/해시 두 축으로 JSON 저장
-// - 콘텐츠 색인: cid/pc/info 기반 -> "<blockIndex>:<entryIndex>" 포인터 저장
-//   (이전처럼 block_hash만 저장하면 재시작 후 entry 위치를 다시 스캔해야 해서 비효율)
-// - 추가 메타: 최신 루트 캐시 등은 선택
+// - UpperBlock 저장: 번호/해시 두 축으로 JSON 저장
+// - AnchorRecord는 개별 진료 정보가 아닌 Hos 체인 루트 정보이므로
+// - Gov 체인은 계약 및 앵커 단위 데이터 검증만 수행하므로,
+//   검색 인덱스 대신 블록 단위 조회 및 루트 캐시 위주로 구성
 ////////////////////////////////////////////////////////////////////////////////
 
 // 전역 DB 핸들 (단일 프로세스 내에서 공유)
@@ -49,21 +49,21 @@ func setLatestHeight(h int) error {
 	return putMeta("height_latest", strconv.Itoa(h))
 }
 
-// LevelDB 열기
+// DB 초기화
 func initDB(path string) {
 	var err error
 	db, err = leveldb.OpenFile(path, nil)
 	if err != nil {
 		log.Fatal(err)
 	}
-	log.Println("[DB] LevelDB initialized at", path)
+	log.Println("[DB][Gov] LevelDB initialized at", path)
 }
 
-// LevelDB 닫기
+// DB 종료
 func closeDB() {
 	if db != nil {
 		db.Close()
-		log.Println("[DB] Closed LevelDB")
+		log.Println("[DB][Gov] Closed LevelDB")
 	}
 }
 
@@ -71,11 +71,11 @@ func closeDB() {
 // 블록 저장/조회
 ////////////////////////////////////////////////////////////////////////////////
 
-// LowerBlock 전체를 JSON으로 저장
-// - Key1: "block_<Index>"     => LowerBlock JSON (번호 기반 접근)
-// - Key2: "hash_<BlockHash>"  => LowerBlock JSON (해시 기반 접근)
+// UpperBlock 전체를 JSON으로 저장
+// - Key1: "block_<Index>"     => UpperBlock JSON (번호 기반 접근)
+// - Key2: "hash_<BlockHash>"  => UpperBlock JSON (해시 기반 접근)
 // 주: 키 형식은 기존 코드와의 호환을 위해 유지
-func saveBlockToDB(block LowerBlock) error {
+func saveBlockToDB(block UpperBlock) error {
 	data, err := json.Marshal(block)
 	if err != nil {
 		return err
@@ -97,35 +97,36 @@ func saveBlockToDB(block LowerBlock) error {
 	if err := db.Put([]byte("root_latest"), []byte(block.MerkleRoot), nil); err != nil {
 		return err
 	}
+
 	log.Printf("[DB] Block #%d saved (Hash=%s)\n", block.Index, block.BlockHash)
 	appendBlockLog(block)
 	return nil
 }
 
 // 인덱스로 블록 조회
-func getBlockByIndex(index int) (LowerBlock, error) {
+func getBlockByIndex(index int) (UpperBlock, error) {
 	key := fmt.Sprintf("block_%d", index)
 	data, err := db.Get([]byte(key), nil)
 	if err != nil {
-		return LowerBlock{}, err
+		return UpperBlock{}, err
 	}
-	var block LowerBlock
+	var block UpperBlock
 	if err := json.Unmarshal(data, &block); err != nil {
-		return LowerBlock{}, err
+		return UpperBlock{}, err
 	}
 	return block, nil
 }
 
 // 블록 해시로 조회
-func getBlockByHash(hash string) (LowerBlock, error) {
+func getBlockByHash(hash string) (UpperBlock, error) {
 	key := fmt.Sprintf("hash_%s", hash)
 	data, err := db.Get([]byte(key), nil)
 	if err != nil {
-		return LowerBlock{}, err
+		return UpperBlock{}, err
 	}
-	var block LowerBlock
+	var block UpperBlock
 	if err := json.Unmarshal(data, &block); err != nil {
-		return LowerBlock{}, err
+		return UpperBlock{}, err
 	}
 	return block, nil
 }
@@ -138,49 +139,23 @@ func getLatestRoot() string {
 	return ""
 }
 
-////////////////////////////////////////////////////////////////////////////////
-// 해시테이블(검색 인덱스) 업데이트
-//  - 블록 단위로 cid/pc/info 색인을 "<blockIndex>:<entryIndex>" 포인터로 저장
-////////////////////////////////////////////////////////////////////////////////
-
-func updateIndicesForBlock(block LowerBlock) error {
-	// 포인터 문자열: "blockIndex:entryIndex"
+// UpperBlock 내의 AnchorRecord(각 Hos별 앵커 데이터)를 기반으로
+// LevelDB에 색인 정보를 갱신하는 함수
+func updateIndicesForBlock(block UpperBlock) error {
 	ptr := func(bi, ei int) []byte { return []byte(fmt.Sprintf("%d:%d", bi, ei)) }
 
-	for ei, entry := range block.Entries {
-		// 1) ClinicID 색인: "cid_<ClinicID>" -> "bi:ei"
-		if entry.ClinicID != "" {
-			keyByCID := fmt.Sprintf("cid_%s", entry.ClinicID)
-			if err := db.Put([]byte(keyByCID), ptr(block.Index, ei), nil); err != nil {
-				return err
-			}
-		}
-
-		// 2) PrescCode 색인: "pc_<PrescCode>" -> "bi:ei"
-		if entry.PrescCode != "" {
-			keyByPC := fmt.Sprintf("pc_%s", entry.PrescCode)
-			if err := db.Put([]byte(keyByPC), ptr(block.Index, ei), nil); err != nil {
-				return err
-			}
-		}
-
-		// 3) Info 키워드 색인(간단 버전)
-		//    - 점 표기(dotted key)나 부분일치는 API 레이어에서 확장 가능
-		//    - 여기서는 cCode 같은 문자열을 소문자로 normalize해서 저장
-		for k, v := range entry.Info {
-			strVal := strings.TrimSpace(fmt.Sprintf("%v", v))
-			if strVal == "" {
-				continue
-			}
-			key := fmt.Sprintf("info_%s_%s", k, strings.ToLower(strVal))
-			if err := db.Put([]byte(key), ptr(block.Index, ei), nil); err != nil {
+	for ei, rec := range block.Records {
+		// Hos별 앵커 색인 등록
+		if rec.HosID != "" {
+			keyByHos := fmt.Sprintf("anchor_%s", rec.HosID)
+			if err := db.Put([]byte(keyByHos), ptr(block.Index, ei), nil); err != nil {
 				return err
 			}
 		}
 	}
 
-	log.Printf("[DB] Indices updated for Block #%d (%d entries)\n",
-		block.Index, len(block.Entries))
+	log.Printf("[DB] Indices updated for UpperBlock #%d (%d anchors)\n",
+		block.Index, len(block.Records))
 	return nil
 }
 
@@ -199,41 +174,12 @@ func parsePtr(s string) (int, int, bool) {
 	return bi, ei, err1 == nil && err2 == nil
 }
 
-// 키워드로 블록 조회(단순 버전)
-//   - keyword가 ClinicID, PrescCode, 또는 Info에 매칭되면
-//     해당 포인터("bi:ei")를 통해 블록을 찾아 반환
-//   - 여러 매칭이 가능할 수 있으나, 여기서는 최초 매칭 1개만 반환(간단화)
-func getBlockByClinic(keyword string) (LowerBlock, error) {
-	// ClinicID 색인 조회
-	if v, err := db.Get([]byte("cid_"+keyword), nil); err == nil {
-		if bi, _, ok := parsePtr(string(v)); ok {
-			return getBlockByIndex(bi)
-		}
-	}
-
-	// PrescCode 색인 조회
-	if v, err := db.Get([]byte("pc_"+keyword), nil); err == nil {
-		if bi, _, ok := parsePtr(string(v)); ok {
-			return getBlockByIndex(bi)
-		}
-	}
-
-	// Info(title 등) 색인 조회 (소문자 normalize)
-	if v, err := db.Get([]byte("info_cCode_"+strings.ToLower(keyword)), nil); err == nil {
-		if bi, _, ok := parsePtr(string(v)); ok {
-			return getBlockByIndex(bi)
-		}
-	}
-
-	return LowerBlock{}, fmt.Errorf("no block found for keyword: %s", keyword)
-}
-
 // ==========================
 // 전체 장부(블록) 조회 유틸
 // ==========================
 
 // 전체 블록 조회
-func listAllBlocks() ([]LowerBlock, error) {
+func listAllBlocks() ([]UpperBlock, error) {
 	h, ok := getLatestHeight()
 	if !ok {
 		// 제네시스만 있을 수도 있으니 0만 확인
@@ -241,9 +187,9 @@ func listAllBlocks() ([]LowerBlock, error) {
 		if err != nil {
 			return nil, fmt.Errorf("no chain: %w", err)
 		}
-		return []LowerBlock{b0}, nil
+		return []UpperBlock{b0}, nil
 	}
-	out := make([]LowerBlock, 0, h+1)
+	out := make([]UpperBlock, 0, h+1)
 	for i := 0; i <= h; i++ {
 		b, err := getBlockByIndex(i)
 		if err != nil {
@@ -254,8 +200,8 @@ func listAllBlocks() ([]LowerBlock, error) {
 	return out, nil
 }
 
-// offset에서 최대 limit개 반환, total(=height+1)도 함께 반환
-func listBlocksPaginated(offset, limit int) ([]LowerBlock, int, error) {
+// 페이지네이션 조회 : ffset에서 최대 limit개 반환, total(=height+1)도 함께 반환
+func listBlocksPaginated(offset, limit int) ([]UpperBlock, int, error) {
 	if offset < 0 || limit <= 0 {
 		return nil, 0, fmt.Errorf("invalid offset/limit")
 	}
@@ -269,13 +215,13 @@ func listBlocksPaginated(offset, limit int) ([]LowerBlock, int, error) {
 	}
 	total := h + 1
 	if offset >= total {
-		return []LowerBlock{}, total, nil
+		return []UpperBlock{}, total, nil
 	}
 	end := offset + limit - 1
 	if end > h {
 		end = h
 	}
-	out := make([]LowerBlock, 0, end-offset+1)
+	out := make([]UpperBlock, 0, end-offset+1)
 	for i := offset; i <= end; i++ {
 		b, err := getBlockByIndex(i)
 		if err != nil {
@@ -288,13 +234,13 @@ func listBlocksPaginated(offset, limit int) ([]LowerBlock, int, error) {
 
 // 현재 노드의 Hos 식별자 반환 (메타데이터에서 읽기)
 func selfID() string {
-	if v, ok := getMeta("meta_hos_id"); ok {
+	if v, ok := getMeta("meta_gov_id"); ok {
 		return v
 	}
-	return "UNKNOWN_Hos"
+	return "UNKNOWN_Gov"
 }
 
-func appendBlockLog(block LowerBlock) {
+func appendBlockLog(block UpperBlock) {
 	f, err := os.OpenFile("block_history.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		log.Printf("[LOG][ERROR] cannot open blockHistory file: %v", err)
@@ -302,8 +248,8 @@ func appendBlockLog(block LowerBlock) {
 	}
 	defer f.Close()
 	// txt 파일에 저장할 내용
-	line := fmt.Sprintf("Block #%02d, Entries: %04d, EndStamp: %s, Elapsed: %f \n",
-		block.Index, len(block.Entries), time.Unix(time.Now().Unix(), 0).Format(time.RFC3339), block.Elapsed)
+	line := fmt.Sprintf("Block #%02d, Entries : %04d, EndStamp : %s, Difficulty : %d \n",
+		block.Index, len(block.Records), time.Unix(time.Now().Unix(), 0).Format(time.RFC3339), block.Difficulty)
 
 	if _, err := f.WriteString(line); err != nil {
 		log.Printf("[LOG][ERROR] cannot write blockHistory: %v", err)
@@ -339,4 +285,51 @@ func resetLocalDB() error {
 
 	log.Printf("[CHAIN] Local chain RESET complete ")
 	return nil
+}
+
+type AnchorInfo struct {
+	Root string `json:"root"`
+	Ts   string `json:"ts"`
+}
+
+func saveAnchorToDB(hosID, root string, ts string) error {
+	ai := AnchorInfo{Root: root, Ts: ts}
+	b, _ := json.Marshal(ai)
+	key := "anchor_" + hosID
+	return db.Put([]byte(key), b, nil)
+}
+func loadAnchorFromDB(hosID string) (AnchorInfo, bool) {
+	key := "anchor_" + hosID
+	data, err := db.Get([]byte(key), nil)
+	if err != nil {
+		return AnchorInfo{}, false
+	}
+	var ai AnchorInfo
+	if err := json.Unmarshal(data, &ai); err != nil {
+		return AnchorInfo{}, false
+	}
+	return ai, true
+}
+
+// 재부팅 후에도 계속 MerkleProof 검증을 가능하게 만들기 위해
+// LevelDB에 저장된 anchor_* 데이터를 모두 읽어 anchorMap에 복원
+func loadAllAnchorsAtBoot() {
+	// LevelDB 의 전체 Key-Value를 순회하기 위한 iterator 생성
+	iter := db.NewIterator(nil, nil)
+	// 반복하면서 모든 키 탐색
+	for iter.Next() {
+		key := string(iter.Key())
+		if strings.HasPrefix(key, "anchor_") {
+			var ai AnchorInfo
+			// Value(JSON)를 역직렬화
+			if err := json.Unmarshal(iter.Value(), &ai); err == nil {
+				// "anchor_<hosid>" 중에서 hosid만 추출
+				hosID := strings.TrimPrefix(key, "anchor_")
+				// 전역변수에 추가
+				anchorMap[hosID] = ai
+				log.Printf("[ANCHOR] Loaded Anchor from DB: %s => %s", hosID, ai.Root)
+			}
+		}
+	}
+	iter.Release()
 }
