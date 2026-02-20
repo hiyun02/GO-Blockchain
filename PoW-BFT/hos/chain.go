@@ -1,15 +1,9 @@
 package main
 
 import (
-	"crypto/ecdsa"
 	"crypto/sha256"
-	"crypto/x509"
-	"encoding/asn1"
-	"encoding/hex"
-	"encoding/pem"
 	"fmt"
 	"log"
-	"math/big"
 	"sync"
 	"sync/atomic"
 	"time"
