@@ -20,36 +20,27 @@ type LowerChain struct {
 	lastBlockTime time.Time      // 마지막 블록 생성 시각
 }
 
-// 합의 단계 상수 정의
-const (
-	ConsIdle       int32 = 0 // 대기 상태
-	ConsPrePrepare int32 = 1 // 리더의 블록 제안 단계
-	ConsPrepare    int32 = 2 // 노드 간 검증 및 투표 단계
-	ConsCommit     int32 = 3 // 최종 합의 및 확정 단계
-)
-
 // 전역 상태 관리 변수
 var (
-	ch                  *LowerChain  // 현재 체인 포인터
-	chainMu             sync.Mutex   // 내부 체인 상태 보호용 뮤텍스
-	self                string       // 현재 노드 주소 NODE_ADDR (예: "hos-node-01:5000")
-	boot                string       // 현재 네트워크 상의 부트노드 주소
-	proposer            string       // BFT 합의를 위한 리더노드 주소
-	startedAt           = time.Now() // 현재 노드 시작 시간
-	isBoot              atomic.Bool  // 현재 노드가 부트노드인지 여부
-	bootAddrMu          sync.RWMutex // 부트노드 주소 접근 시 동시성 보호용 RW 잠금 객체
-	govBoot             string       // Gov 체인의 부트노드 주소 (예 : "Gov-node-01:5000")
-	govBootMu           sync.RWMutex // GovBoot 접근 시 동시성 보호용 RW 잠금 객체
-	peers               []string
-	peerMu              sync.Mutex
-	peerAliveMap        = make(map[string]bool) // 노드 상태를 주소:생존여부 형태로 관리하는 맵
-	aliveMu             sync.RWMutex
-	peerPubKeys         = make(map[string]string) // 전체 노드의 공개키 관리객체
-	pkMu                sync.RWMutex
-	consensusInProgress atomic.Bool // 전역 합의 플래그
-	ConsWatcherTime     = 1         // 메모리풀 검사시간(1초)
-	NetworkWatcherTime  = 60        // 노드 관리 기준시간(60초)
-	ChainWatcherTime    = 300       // 체인 관리 기준시간(300초)
+	ch                 *LowerChain  // 현재 체인 포인터
+	chainMu            sync.Mutex   // 내부 체인 상태 보호용 뮤텍스
+	self               string       // 현재 노드 주소 NODE_ADDR (예: "hos-node-01:5000")
+	boot               string       // 현재 네트워크 상의 부트노드 주소
+	proposer           string       // BFT 합의를 위한 리더노드 주소
+	startedAt          = time.Now() // 현재 노드 시작 시간
+	isBoot             atomic.Bool  // 현재 노드가 부트노드인지 여부
+	bootAddrMu         sync.RWMutex // 부트노드 주소 접근 시 동시성 보호용 RW 잠금 객체
+	govBoot            string       // Gov 체인의 부트노드 주소 (예 : "Gov-node-01:5000")
+	govBootMu          sync.RWMutex // GovBoot 접근 시 동시성 보호용 RW 잠금 객체
+	peers              []string
+	peerMu             sync.Mutex
+	peerAliveMap       = make(map[string]bool) // 노드 상태를 주소:생존여부 형태로 관리하는 맵
+	aliveMu            sync.RWMutex
+	peerPubKeys        = make(map[string]string) // 전체 노드의 공개키 관리객체
+	pkMu               sync.RWMutex
+	ConsWatcherTime    = 1   // 메모리풀 검사시간(1초)
+	NetworkWatcherTime = 60  // 노드 관리 기준시간(60초)
+	ChainWatcherTime   = 300 // 체인 관리 기준시간(300초)
 )
 
 // 체인 초기화 및 제네시스 확인
