@@ -9,171 +9,291 @@ import (
 	"time"
 )
 
-// BFT 합의 수집기 (Prepare/Commit 단계별로 별도 관리)
+//////////////////////////////////////////////////
+// PBFT STATE STRUCTURES
+//////////////////////////////////////////////////
+
 type consensusCollector struct {
 	mu         sync.Mutex
-	signatures []string
-	votedPeers map[string]bool
+	signatures map[string]string
+}
+
+func newCollector() *consensusCollector {
+	return &consensusCollector{
+		signatures: make(map[string]string),
+	}
+}
+
+type viewState struct {
+	mu               sync.Mutex
+	Phase            int32
+	Block            LowerBlock
+	PrepareCollector *consensusCollector
+	CommitCollector  *consensusCollector
 }
 
 var (
-	prepareCollector *consensusCollector
-	commitCollector  *consensusCollector
-	collectorMu      sync.Mutex
-	currentBlock     LowerBlock // 현재 합의 중인 블록 임시 저장
+	viewStates = make(map[int]*viewState)
+	viewMu     sync.Mutex
 )
 
-// 1. WATCHER: 리더가 블록을 제안 (Pre-Prepare)
-func startMiningWatcher() {
+func getOrCreateView(view int) *viewState {
+	viewMu.Lock()
+	defer viewMu.Unlock()
+
+	vs, ok := viewStates[view]
+	if !ok {
+		vs = &viewState{
+			Phase:            ConsIdle,
+			PrepareCollector: newCollector(),
+			CommitCollector:  newCollector(),
+		}
+		viewStates[view] = vs
+	}
+	return vs
+}
+
+func deleteView(view int) {
+	viewMu.Lock()
+	defer viewMu.Unlock()
+	delete(viewStates, view)
+}
+
+//////////////////////////////////////////////////
+// WATCHER (LEADER ONLY)
+//////////////////////////////////////////////////
+
+func startConsensWatcher() {
+
 	t := time.NewTicker(time.Duration(ConsWatcherTime) * time.Second)
+	log.Printf("[WATCHER] PBFT Watcher Started")
+
 	for range t.C {
-		if ConsPhase.Load() != ConsIdle || pendingIsEmpty() {
+
+		if self != boot {
 			continue
 		}
-		if self != boot { // 리더(부트노드)만 제안
+
+		// 🔒 글로벌 합의 중이면 시작 금지
+		if consensusInProgress.Load() {
+			continue
+		}
+
+		if pendingIsEmpty() {
 			continue
 		}
 
 		records := getPending()
-		ConsPhase.Store(ConsPrePrepare)
+		if len(records) == 0 {
+			continue
+		}
 
-		// 블록 생성 및 리더 서명
-		newBlock := createProposedBlock(records)
-		currentBlock = newBlock
+		height, _ := getLatestHeight()
+		view := height + 1
 
-		// 콜렉터 초기화
-		initCollectors()
+		vs := getOrCreateView(view)
 
-		log.Printf("[BFT-LEADER] Phase: Pre-Prepare | Index: %d", newBlock.Index)
-		broadcastToAll("/bft/start", newBlock)
+		vs.mu.Lock()
+		if vs.Phase != ConsIdle {
+			vs.mu.Unlock()
+			continue
+		}
+
+		block := createProposedBlock(records)
+		vs.Block = block
+		vs.Phase = ConsPrePrepare
+		vs.mu.Unlock()
+
+		// 🔒 합의 시작 플래그 ON
+		consensusInProgress.Store(true)
+
+		log.Printf("[BFT-LEADER] PrePrepare | view=%d | records=%d", view, len(records))
+
+		broadcastToAll("/bft/start", struct {
+			View  int
+			Block LowerBlock
+		}{view, block})
 	}
 }
 
-// 2. NODE: 리더의 제안을 받고 검증 신호 전파 (Prepare)
-func handleBftStart(w http.ResponseWriter, r *http.Request) {
-	var lb LowerBlock
-	json.NewDecoder(r.Body).Decode(&lb)
+//////////////////////////////////////////////////
+// PRE-PREPARE → PREPARE
+//////////////////////////////////////////////////
 
-	// 단계 보호 및 검증
-	if !ConsPhase.CompareAndSwap(ConsIdle, ConsPrepare) {
+func handleBftStart(w http.ResponseWriter, r *http.Request) {
+
+	var msg struct {
+		View  int
+		Block LowerBlock
+	}
+	json.NewDecoder(r.Body).Decode(&msg)
+
+	vs := getOrCreateView(msg.View)
+
+	vs.mu.Lock()
+	defer vs.mu.Unlock()
+
+	if vs.Phase != ConsIdle {
 		return
 	}
 
 	height, _ := getLatestHeight()
 	prev, _ := getBlockByIndex(height)
-	if err := validateLowerBlock(lb, prev); err != nil {
-		ConsPhase.Store(ConsIdle)
+
+	if err := validateLowerBlock(msg.Block, prev); err != nil {
 		return
 	}
 
-	currentBlock = lb // 검증된 블록 저장
+	vs.Block = msg.Block
+	vs.Phase = ConsPrepare
+
 	myPriv, _ := getMeta("meta_hos_privkey")
-	mySig := makeAnchorSignature(myPriv, lb.BlockHash, "")
+	sig := makeAnchorSignature(myPriv, msg.Block.BlockHash, "")
 
-	log.Printf("[BFT-NODE] Phase: Prepare | Index: %d", lb.Index)
-	// 모든 노드에게 "나 이 블록 준비됐어"라고 Prepare 신호 전파
-	broadcastToAll("/bft/prepare", map[string]string{"addr": self, "sig": mySig})
-	w.WriteHeader(http.StatusOK)
+	// 자기 prepare 직접 추가 (안전)
+	addVote(vs.PrepareCollector, self, sig)
+
+	log.Printf("[BFT-NODE] Prepare | view=%d", msg.View)
+
+	broadcastToAll("/bft/prepare", struct {
+		View int
+		Addr string
+		Sig  string
+		Hash string
+	}{
+		msg.View,
+		self,
+		sig,
+		msg.Block.BlockHash,
+	})
 }
 
-// 3. NODE/LEADER: Prepare 서명 수집 및 Commit 전파
+//////////////////////////////////////////////////
+// PREPARE → COMMIT
+//////////////////////////////////////////////////
+
 func handleReceivePrepare(w http.ResponseWriter, r *http.Request) {
-	var msg struct{ Addr, Sig string }
+
+	var msg struct {
+		View int
+		Addr string
+		Sig  string
+		Hash string
+	}
 	json.NewDecoder(r.Body).Decode(&msg)
 
-	if addVote(prepareCollector, msg.Addr, msg.Sig) {
-		if checkQuorum(prepareCollector) && ConsPhase.Load() == ConsPrepare {
-			ConsPhase.Store(ConsCommit)
+	vs := getOrCreateView(msg.View)
 
-			myPriv, _ := getMeta("meta_hos_privkey")
-			mySig := makeAnchorSignature(myPriv, currentBlock.BlockHash, "")
+	vs.mu.Lock()
+	defer vs.mu.Unlock()
 
-			log.Printf("[BFT-NODE] Phase: Commit | Quorum reached")
-			// 정족수 채워지면 "진짜 합의하자"고 Commit 신호 전파
-			broadcastToAll("/bft/commit", map[string]string{"addr": self, "sig": mySig})
-		}
+	if vs.Block.BlockHash != msg.Hash {
+		return
+	}
+
+	if !addVote(vs.PrepareCollector, msg.Addr, msg.Sig) {
+		return
+	}
+
+	if checkQuorum(vs.PrepareCollector) && vs.Phase == ConsPrepare {
+
+		vs.Phase = ConsCommit
+
+		myPriv, _ := getMeta("meta_hos_privkey")
+		sig := makeAnchorSignature(myPriv, vs.Block.BlockHash, "")
+
+		// 자기 commit 직접 추가
+		addVote(vs.CommitCollector, self, sig)
+
+		log.Printf("[BFT] Commit broadcast | view=%d", msg.View)
+
+		broadcastToAll("/bft/commit", struct {
+			View int
+			Addr string
+			Sig  string
+			Hash string
+		}{
+			msg.View,
+			self,
+			sig,
+			vs.Block.BlockHash,
+		})
 	}
 }
 
-// 4. NODE/LEADER: Commit 서명 수집 및 최종 장부 기록
+//////////////////////////////////////////////////
+// COMMIT → FINALIZE
+//////////////////////////////////////////////////
+
 func handleReceiveCommit(w http.ResponseWriter, r *http.Request) {
-	var msg struct{ Addr, Sig string }
+
+	var msg struct {
+		View int
+		Addr string
+		Sig  string
+		Hash string
+	}
 	json.NewDecoder(r.Body).Decode(&msg)
 
-	if addVote(commitCollector, msg.Addr, msg.Sig) {
-		if checkQuorum(commitCollector) && ConsPhase.Load() == ConsCommit {
-			log.Printf("[BFT-SUCCESS] Consensus Reached for Block #%d", currentBlock.Index)
+	vs := getOrCreateView(msg.View)
 
-			// 최종 수집된 서명들을 블록에 담아 저장
-			currentBlock.Signatures = commitCollector.signatures
-			onBlockReceived(currentBlock)
+	vs.mu.Lock()
+	defer vs.mu.Unlock()
 
-			ConsPhase.Store(ConsIdle) // 합의 종료 및 대기상태 복귀
+	if vs.Block.BlockHash != msg.Hash {
+		return
+	}
+
+	if !addVote(vs.CommitCollector, msg.Addr, msg.Sig) {
+		return
+	}
+
+	if checkQuorum(vs.CommitCollector) && vs.Phase == ConsCommit {
+
+		vs.Phase = -1 // 🔒 finalize 상태
+
+		for _, sig := range vs.CommitCollector.signatures {
+			vs.Block.Signatures = append(vs.Block.Signatures, sig)
 		}
+
+		log.Printf("[BFT-SUCCESS] Block Finalized | view=%d", msg.View)
+
+		onBlockReceived(vs.Block)
+
+		deleteView(msg.View)
 	}
 }
 
-// --- 헬퍼 함수들 ---
+//////////////////////////////////////////////////
+// HELPERS
+//////////////////////////////////////////////////
 
-func initCollectors() {
-	collectorMu.Lock()
-	defer collectorMu.Unlock()
-	prepareCollector = &consensusCollector{votedPeers: make(map[string]bool)}
-	commitCollector = &consensusCollector{votedPeers: make(map[string]bool)}
-}
-
-func addVote(c *consensusCollector, addr string, sig string) bool {
+func addVote(c *consensusCollector, addr, sig string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.votedPeers[addr] {
+
+	if _, exists := c.signatures[addr]; exists {
 		return false
 	}
-	c.signatures = append(c.signatures, sig)
-	c.votedPeers[addr] = true
+	c.signatures[addr] = sig
 	return true
 }
 
 func checkQuorum(c *consensusCollector) bool {
 	n := len(peersSnapshot()) + 1
-	return len(c.signatures) >= (2*(n-1)/3 + 1)
+	required := (2*(n-1))/3 + 1
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return len(c.signatures) >= required
 }
 
 func broadcastToAll(path string, data any) {
 	body, _ := json.Marshal(data)
-	nodes := append(peersSnapshot(), self) // 나 포함 전체 전파
+	nodes := append(peersSnapshot(), self)
+
 	for _, node := range nodes {
 		go http.Post("http://"+node+path, "application/json", bytes.NewReader(body))
 	}
-}
-
-// 리더가 새로운 후보 블록을 생성하는 함수
-func createProposedBlock(entries []ClinicRecord) LowerBlock {
-	height, _ := getLatestHeight()          //
-	prevBlock, _ := getBlockByIndex(height) //
-
-	newBlock := LowerBlock{
-		Index:      height + 1,
-		HosID:      selfID(), //
-		PrevHash:   prevBlock.BlockHash,
-		Timestamp:  time.Now().Format(time.RFC3339),
-		Entries:    entries,
-		Proposer:   self,
-		Signatures: []string{}, // 아직 다른 노드 서명은 없음
-	}
-
-	// 머클루트 계산 및 블록 해시 생성
-	leafHashes := make([]string, len(entries))
-	for i, r := range entries {
-		leafHashes[i] = hashClinicRecord(r)
-	}
-	newBlock.MerkleRoot = merkleRootHex(leafHashes)
-	newBlock.LeafHashes = leafHashes
-	newBlock.BlockHash = newBlock.computeHash() //
-
-	// 리더(자신)의 서명 생성하여 추가
-	myPriv, _ := getMeta("meta_hos_privkey")                     //
-	mySig := makeAnchorSignature(myPriv, newBlock.BlockHash, "") //
-	newBlock.Signatures = append(newBlock.Signatures, mySig)
-
-	return newBlock
 }

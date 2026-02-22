@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 	"strings"
+	"time"
 )
 
 // //////////////////////////////////////////////////////////////////////////////
@@ -64,4 +65,39 @@ func (b LowerBlock) computeHash() string {
 		Proposer:   b.Proposer,
 	}
 	return sha256Hex(jsonCanonical(hdr))
+}
+
+func createProposedBlock(entries []ClinicRecord) LowerBlock {
+
+	height, _ := getLatestHeight()
+	prevBlock, _ := getBlockByIndex(height)
+
+	newBlock := LowerBlock{
+		Index:      height + 1,
+		HosID:      selfID(),
+		PrevHash:   prevBlock.BlockHash,
+		Timestamp:  time.Now().UTC().Format(time.RFC3339),
+		Entries:    entries,
+		Proposer:   self,
+		Signatures: []string{},
+		Elapsed:    0,
+	}
+
+	// Leaf Hash 생성
+	leafHashes := make([]string, len(entries))
+	for i, r := range entries {
+		leafHashes[i] = hashClinicRecord(r)
+	}
+
+	newBlock.LeafHashes = leafHashes
+
+	// Merkle Root 계산
+	if len(leafHashes) > 0 {
+		newBlock.MerkleRoot = merkleRootHex(leafHashes)
+	}
+
+	// Block Hash 계산
+	newBlock.BlockHash = newBlock.computeHash()
+
+	return newBlock
 }

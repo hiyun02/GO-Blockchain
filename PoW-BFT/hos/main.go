@@ -130,7 +130,7 @@ func main() {
 	}()
 	go func() {
 		log.Printf("[WATCHER] starting unified mining watcher (%ds interval)", ConsWatcherTime)
-		startMiningWatcher()
+		startConsensWatcher()
 	}()
 	//go func() {
 	//	log.Printf("[WATCHER] starting unified chain watcher (%ds interval)", ChainWatcherTime)
