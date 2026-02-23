@@ -171,21 +171,20 @@ func startConsensusWatcher() {
 	}
 }
 
-//////////////////////////////////////////////////
+// ////////////////////////////////////////////////
 // PRE-PREPARE
-//////////////////////////////////////////////////
-
+// ////////////////////////////////////////////////
 func handleBftStart(w http.ResponseWriter, r *http.Request) {
-
 	var msg struct {
 		View  int        `json:"view"`
 		Block LowerBlock `json:"block"`
 	}
 
-	json.NewDecoder(r.Body).Decode(&msg)
+	if err := json.NewDecoder(r.Body).Decode(&msg); err != nil {
+		return
+	}
 
 	vs := getOrCreateView(msg.View)
-
 	vs.mu.Lock()
 	defer vs.mu.Unlock()
 
@@ -193,9 +192,10 @@ func handleBftStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// BlockHash 재검증
-	if msg.Block.computeHash() != msg.Block.BlockHash {
-		log.Printf("[PBFT] invalid block hash")
+	// [DEBUG] 수신된 블록 해시와 직접 계산한 해시 비교
+	computed := msg.Block.computeHash()
+	if computed != msg.Block.BlockHash {
+		log.Printf("[DEBUG][VFY] Hash Mismatch! MsgHash: %s, Computed: %s", msg.Block.BlockHash, computed)
 		return
 	}
 
@@ -211,11 +211,12 @@ func handleBftStart(w http.ResponseWriter, r *http.Request) {
 	vs.Phase = PhasePrepare
 
 	myPriv, _ := getMeta("meta_hos_privkey")
+	// [DEBUG] 내 서명 생성 로그
 	sig := makeAnchorSignature(myPriv, msg.Block.BlockHash, "")
 
 	vs.Prepare.add(self, sig)
 
-	log.Printf("[PBFT][PREPARE] send prepare view=%d", msg.View)
+	log.Printf("[PBFT][PREPARE] send prepare view=%d, hash=%s", msg.View, msg.Block.BlockHash)
 
 	broadcast("/bft/prepare", map[string]any{
 		"view": msg.View,
@@ -230,7 +231,6 @@ func handleBftStart(w http.ResponseWriter, r *http.Request) {
 //////////////////////////////////////////////////
 
 func handleReceivePrepare(w http.ResponseWriter, r *http.Request) {
-
 	var msg struct {
 		View int    `json:"view"`
 		Addr string `json:"addr"`
@@ -238,26 +238,34 @@ func handleReceivePrepare(w http.ResponseWriter, r *http.Request) {
 		Hash string `json:"hash"`
 	}
 
-	json.NewDecoder(r.Body).Decode(&msg)
-
-	vs := getOrCreateView(msg.View)
-
-	vs.mu.Lock()
-	defer vs.mu.Unlock()
-
-	if vs.Block.BlockHash != msg.Hash {
+	if err := json.NewDecoder(r.Body).Decode(&msg); err != nil {
 		return
 	}
 
+	vs := getOrCreateView(msg.View)
+	vs.mu.Lock()
+	defer vs.mu.Unlock()
+
+	// [DEBUG] 메시지 출처 및 해시 일치 확인
+	if vs.Block.BlockHash != msg.Hash {
+		log.Printf("[DEBUG][VFY] Prepare Hash Diff! My: %s, FromMsg: %s", vs.Block.BlockHash, msg.Hash)
+		return
+	}
+
+	// [DEBUG] 주소 기반 공개키 맵 조회 로그
 	pub, ok := peerPubKeys[msg.Addr]
 	if !ok {
+		log.Printf("[DEBUG][VFY] PubKey Not Found for Addr: [%s]. Current Peers in Map: %d", msg.Addr, len(peerPubKeys))
 		return
 	}
 
 	hashBytes, _ := hex.DecodeString(msg.Hash)
 
-	if !verifyECDSA(pub, hashBytes, msg.Sig) {
-		log.Printf("[PBFT] prepare signature invalid")
+	// [DEBUG] ECDSA 검증 직전 세부 데이터 확인
+	isValid := verifyECDSA(pub, hashBytes, msg.Sig)
+	if !isValid {
+		log.Printf("[DEBUG][VFY] INVALID SIG! From: %s, Hash: %s, SigPrefix: %s..., PubKeyPrefix: %s...",
+			msg.Addr, msg.Hash, msg.Sig[:10], pub[:30])
 		return
 	}
 
@@ -265,20 +273,15 @@ func handleReceivePrepare(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("[PBFT][PREPARE] collected=%d/%d view=%d",
-		vs.Prepare.count(), quorumSize(), msg.View)
+	log.Printf("[PBFT][PREPARE] collected=%d/%d view=%d", vs.Prepare.count(), quorumSize(), msg.View)
 
 	if vs.Prepare.count() >= quorumSize() && vs.Phase == PhasePrepare {
-
 		vs.Phase = PhaseCommit
-
 		myPriv, _ := getMeta("meta_hos_privkey")
 		sig := makeAnchorSignature(myPriv, vs.Block.BlockHash, "")
-
 		vs.Commit.add(self, sig)
 
 		log.Printf("[PBFT][COMMIT] broadcast view=%d", msg.View)
-
 		broadcast("/bft/commit", map[string]any{
 			"view": msg.View,
 			"addr": self,
@@ -291,9 +294,7 @@ func handleReceivePrepare(w http.ResponseWriter, r *http.Request) {
 //////////////////////////////////////////////////
 // COMMIT
 //////////////////////////////////////////////////
-
 func handleReceiveCommit(w http.ResponseWriter, r *http.Request) {
-
 	var msg struct {
 		View int    `json:"view"`
 		Addr string `json:"addr"`
@@ -301,26 +302,29 @@ func handleReceiveCommit(w http.ResponseWriter, r *http.Request) {
 		Hash string `json:"hash"`
 	}
 
-	json.NewDecoder(r.Body).Decode(&msg)
+	if err := json.NewDecoder(r.Body).Decode(&msg); err != nil {
+		return
+	}
 
 	vs := getOrCreateView(msg.View)
-
 	vs.mu.Lock()
 	defer vs.mu.Unlock()
 
 	if vs.Block.BlockHash != msg.Hash {
+		log.Printf("[DEBUG][VFY] Commit Hash Diff! My: %s, FromMsg: %s", vs.Block.BlockHash, msg.Hash)
 		return
 	}
 
 	pub, ok := peerPubKeys[msg.Addr]
 	if !ok {
+		log.Printf("[DEBUG][VFY] PubKey Not Found (Commit) Addr: [%s]", msg.Addr)
 		return
 	}
 
 	hashBytes, _ := hex.DecodeString(msg.Hash)
 
 	if !verifyECDSA(pub, hashBytes, msg.Sig) {
-		log.Printf("[PBFT] commit signature invalid")
+		log.Printf("[DEBUG][VFY] INVALID COMMIT SIG! From: %s, Hash: %s", msg.Addr, msg.Hash)
 		return
 	}
 
@@ -328,23 +332,15 @@ func handleReceiveCommit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("[PBFT][COMMIT] collected=%d/%d view=%d",
-		vs.Commit.count(), quorumSize(), msg.View)
+	log.Printf("[PBFT][COMMIT] collected=%d/%d view=%d", vs.Commit.count(), quorumSize(), msg.View)
 
-	if vs.Commit.count() >= quorumSize() &&
-		vs.Phase == PhaseCommit &&
-		!vs.Finalized {
-
+	if vs.Commit.count() >= quorumSize() && vs.Phase == PhaseCommit && !vs.Finalized {
 		vs.Phase = PhaseFinal
 		vs.Finalized = true
-
 		vs.Block.Signatures = vs.Commit.all()
 
-		log.Printf("[PBFT][FINALIZED] view=%d hash=%s",
-			msg.View, vs.Block.BlockHash)
-
+		log.Printf("[PBFT][FINALIZED] view=%d hash=%s", msg.View, vs.Block.BlockHash)
 		onBlockReceived(vs.Block)
-
 		deleteView(msg.View)
 		consensusInProgress.Store(false)
 	}

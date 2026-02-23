@@ -157,7 +157,9 @@ func RegisterAPI(mux *http.ServeMux, chain *LowerChain) {
 	// GET /peers
 	mux.HandleFunc("/peers", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(peersSnapshot()) // 비어있어도 "[]" 반환
+
+		// 주소 리스트만 보내는 대신, 주소:공개키 맵을 보냄
+		_ = json.NewEncoder(w).Encode(peerPubKeys)
 	})
 
 	// 데이터 업로드 요청을 받아 메모리풀에 저장시킴

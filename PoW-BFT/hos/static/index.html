@@ -4,78 +4,138 @@
     <meta charset="UTF-8">
     <title>Blockchain Explorer</title>
     <style>
-        body { font-family: Arial; margin: 20px; }
-        .block { padding:10px; margin:10px 0; border:1px solid #ddd; }
-        .title { font-weight:bold; }
-        a { text-decoration:none; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 20px; background-color: #f9f9f9; }
+        .container { max-width: 1000px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        .block { padding:15px; margin:10px 0; border:1px solid #eee; border-left: 5px solid #007bff; background: #fff; }
+        .title { font-weight:bold; font-size: 1.1em; margin-bottom: 5px; }
+        .peer-table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 0.9em; }
+        .peer-table th, .peer-table td { border: 1px solid #ddd; padding: 10px; text-align: left; }
+        .peer-table th { background-color: #f2f2f2; }
+        .pubkey-code { background: #f0f0f0; padding: 2px 5px; border-radius: 4px; font-family: monospace; color: #d63384; word-break: break-all; }
+        a { color: #007bff; text-decoration:none; }
+        a:hover { text-decoration: underline; }
+        button { padding: 10px 20px; background: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 1em; }
+        hr { border: 0; border-top: 1px solid #eee; margin: 20px 0; }
     </style>
 </head>
 <body>
 
-<h1>📦 Hos 체인 전체조회</h1>
+<div class="container">
+    <h1>📦 Hos 체인 전체조회</h1>
 
-<div id="status"></div>
-<div id="peers"></div>
+    <div id="status">
+        <p>데이터를 불러오는 중...</p>
+    </div>
 
-<hr>
+    <hr>
 
-<h2>블록 목록</h2>
-<div id="blocks"></div>
+    <h2>👥 Peers & Public Keys</h2>
+    <div id="peers-container">
+        <table class="peer-table">
+            <thead>
+            <tr>
+                <th>노드 주소 (Address)</th>
+                <th>공개키 (Public Key Prefix)</th>
+            </tr>
+            </thead>
+            <tbody id="peers-table-body">
+            <tr><td colspan="2">피어 정보를 확인하는 중...</td></tr>
+            </tbody>
+        </table>
+    </div>
 
-<hr>
+    <hr>
 
-<button onclick="location.href='/upload.html'">🚀 채굴 시작하기</button>
+    <h2>📄 블록 목록</h2>
+    <div id="blocks"></div>
+
+    <hr>
+
+    <button onclick="location.href='/upload.html'">🚀 데이터 업로드 (채굴 트리거)</button>
+</div>
 
 <script>
-    // -----------------------
-    // 노드 상태
-    // -----------------------
+    // 1. 노드 상태 정보 업데이트
     fetch('/status')
         .then(res => res.json())
         .then(d => {
             document.getElementById('status').innerHTML = `
-      <h2>노드 상태</h2>
-      <p>주소: ${d.addr}</p>
-      <p>높이(height): ${d.height}</p>
-      <p>부트노드 여부: ${d.is_boot}</p>
-      <p>부트노드 주소: ${d.bootAddr}</p>
-      <p>시작 시간: ${d.started_at}</p>
-      <p>Gov 부트노드 주소: ${d.gov_boot}</p>
-    `;
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                    <div>
+                        <p><b>📍 내 주소:</b> ${d.addr}</p>
+                        <p><b>📊 현재 높이:</b> ${d.height}</p>
+                        <p><b>👑 현재 리더:</b> <span style="color:blue">${d.proposer}</span></p>
+                    </div>
+                    <div>
+                        <p><b>🚀 부트노드:</b> ${d.is_boot ? '✅ (본인)' : d.bootAddr}</p>
+                        <p><b>🕒 시작 시간:</b> ${new Date(d.started_at).toLocaleString()}</p>
+                        <p><b>🔗 Gov 부트:</b> ${d.Gov_boot}</p>
+                    </div>
+                </div>
+            `;
         });
 
-    // -----------------------
-    // Peers 목록
-    // -----------------------
+    // 2. Peers 및 공개키 맵 업데이트
     fetch('/peers')
         .then(res => res.json())
-        .then(list => {
-            document.getElementById('peers').innerHTML =
-                "<h2>Peers</h2>" +
-                list.map(p => `<p>${p}</p>`).join("");
+        .then(peerMap => {
+            const tbody = document.getElementById('peers-table-body');
+
+            // peerMap이 배열로 올 경우와 객체(Map)로 올 경우를 모두 대응
+            const entries = Array.isArray(peerMap)
+                ? peerMap.map(addr => [addr, "Key 정보 없음 (API 확인 필요)"])
+                : Object.entries(peerMap);
+
+            if (entries.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="2" style="text-align:center;">연결된 피어가 없습니다.</td></tr>`;
+                return;
+            }
+
+            tbody.innerHTML = entries.map(([addr, pubKey]) => {
+                // 키가 너무 길면 앞뒤만 잘라서 표시 (마우스 올리면 전체 툴팁)
+                const shortKey = pubKey.length > 60
+                    ? pubKey.substring(0, 35) + "..." + pubKey.substring(pubKey.length - 25)
+                    : pubKey;
+
+                return `
+                    <tr>
+                        <td><b>${addr}</b> ${addr === selfAddr() ? '<span style="font-size:0.8em; color:green;">(나)</span>' : ''}</td>
+                        <td>
+                            <code class="pubkey-code" title="${pubKey}">${shortKey}</code>
+                        </td>
+                    </tr>
+                `;
+            }).join("");
+        })
+        .catch(err => {
+            document.getElementById('peers-table-body').innerHTML = `<tr><td colspan="2" style="color:red;">오류: ${err.message}</td></tr>`;
         });
 
-    // -----------------------
-    // 블록 리스트
-    // -----------------------
+    // 3. 블록 리스트 업데이트
     fetch('/blocks?offset=0&limit=100')
         .then(res => res.json())
         .then(d => {
             const html = d.items.map(b => `
-      <div class="block">
-        <div class="title">
-          <a href="/detail.html?id=${b.index}">
-            Block #${b.index}
-          </a>
-        </div>
-        <p>Timestamp: ${b.timestamp}</p>
-        <p>Entries: ${b.entries ? b.entries.length : 0}</p>
-        <p>Hash: ${b.block_hash}</p>
-      </div>
-    `).join("");
+                <div class="block">
+                    <div class="title">
+                        <a href="/detail.html?id=${b.index}">Block #${b.index}</a>
+                    </div>
+                    <p style="font-size:0.85em; color:#666;">
+                        🕒 ${b.timestamp} | 🗳️ 서명 수: ${b.signatures ? b.signatures.length : 0} | 👤 제안자: ${b.proposer}
+                    </p>
+                    <p style="font-size:0.9em;"><b>Hash:</b> <small>${b.block_hash}</small></p>
+                    <p style="font-size:0.9em;"><b>Entries:</b> ${b.entries ? b.entries.length : 0} items</p>
+                </div>
+            `).join("");
 
-            document.getElementById('blocks').innerHTML = html;
+            document.getElementById('blocks').innerHTML = html || "<p>생성된 블록이 없습니다.</p>";
         });
+
+    // 헬퍼: 현재 노드 주소 식별 (status에서 가져오기 전용)
+    function selfAddr() {
+        const addrElement = document.querySelector('#status b');
+        return addrElement ? addrElement.nextSibling.textContent.trim() : "";
+    }
 </script>
 
 </body>
