@@ -119,20 +119,16 @@ func quorumSize() int {
 //////////////////////////////////////////////////
 
 func startConsensusWatcher() {
-
 	ticker := time.NewTicker(time.Second)
 	log.Printf("[PBFT] Watcher started")
 
 	for range ticker.C {
-
 		if self != boot {
 			continue
 		}
-
 		if consensusInProgress.Load() {
 			continue
 		}
-
 		if pendingIsEmpty() {
 			continue
 		}
@@ -154,7 +150,6 @@ func startConsensusWatcher() {
 		}
 
 		block := createProposedBlock(records)
-
 		vs.Block = block
 		vs.Phase = PhasePrePrepare
 		vs.mu.Unlock()
@@ -171,9 +166,9 @@ func startConsensusWatcher() {
 	}
 }
 
-// ////////////////////////////////////////////////
+//////////////////////////////////////////////////
 // PRE-PREPARE
-// ////////////////////////////////////////////////
+//////////////////////////////////////////////////
 func handleBftStart(w http.ResponseWriter, r *http.Request) {
 	var msg struct {
 		View  int        `json:"view"`
@@ -192,7 +187,6 @@ func handleBftStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// [DEBUG] 수신된 블록 해시와 직접 계산한 해시 비교
 	computed := msg.Block.computeHash()
 	if computed != msg.Block.BlockHash {
 		log.Printf("[DEBUG][VFY] Hash Mismatch! MsgHash: %s, Computed: %s", msg.Block.BlockHash, computed)
@@ -211,7 +205,6 @@ func handleBftStart(w http.ResponseWriter, r *http.Request) {
 	vs.Phase = PhasePrepare
 
 	myPriv, _ := getMeta("meta_hos_privkey")
-	// [DEBUG] 내 서명 생성 로그
 	sig := makeAnchorSignature(myPriv, msg.Block.BlockHash, "")
 
 	vs.Prepare.add(self, sig)
@@ -246,26 +239,29 @@ func handleReceivePrepare(w http.ResponseWriter, r *http.Request) {
 	vs.mu.Lock()
 	defer vs.mu.Unlock()
 
-	// [DEBUG] 메시지 출처 및 해시 일치 확인
 	if vs.Block.BlockHash != msg.Hash {
 		log.Printf("[DEBUG][VFY] Prepare Hash Diff! My: %s, FromMsg: %s", vs.Block.BlockHash, msg.Hash)
 		return
 	}
 
-	// [DEBUG] 주소 기반 공개키 맵 조회 로그
-	pub, ok := peerPubKeys[msg.Addr]
+	// [수정] 자기 자신의 공개키 처리 추가
+	var pub string
+	var ok bool
+	if msg.Addr == self {
+		pub, ok = getMeta("meta_hos_pubkey")
+	} else {
+		pub, ok = peerPubKeys[msg.Addr]
+	}
+
 	if !ok {
-		log.Printf("[DEBUG][VFY] PubKey Not Found for Addr: [%s]. Current Peers in Map: %d", msg.Addr, len(peerPubKeys))
+		log.Printf("[DEBUG][VFY] PubKey Not Found (Prepare) Addr: [%s]", msg.Addr)
 		return
 	}
 
 	hashBytes, _ := hex.DecodeString(msg.Hash)
 
-	// [DEBUG] ECDSA 검증 직전 세부 데이터 확인
-	isValid := verifyECDSA(pub, hashBytes, msg.Sig)
-	if !isValid {
-		log.Printf("[DEBUG][VFY] INVALID SIG! From: %s, Hash: %s, SigPrefix: %s..., PubKeyPrefix: %s...",
-			msg.Addr, msg.Hash, msg.Sig[:10], pub[:30])
+	if !verifyECDSA(pub, hashBytes, msg.Sig) {
+		log.Printf("[DEBUG][VFY] INVALID PREPARE SIG! From: %s, Hash: %s", msg.Addr, msg.Hash)
 		return
 	}
 
@@ -294,6 +290,7 @@ func handleReceivePrepare(w http.ResponseWriter, r *http.Request) {
 //////////////////////////////////////////////////
 // COMMIT
 //////////////////////////////////////////////////
+
 func handleReceiveCommit(w http.ResponseWriter, r *http.Request) {
 	var msg struct {
 		View int    `json:"view"`
@@ -315,7 +312,15 @@ func handleReceiveCommit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pub, ok := peerPubKeys[msg.Addr]
+	// [수정] 자기 자신의 공개키 처리 추가
+	var pub string
+	var ok bool
+	if msg.Addr == self {
+		pub, ok = getMeta("meta_hos_pubkey")
+	} else {
+		pub, ok = peerPubKeys[msg.Addr]
+	}
+
 	if !ok {
 		log.Printf("[DEBUG][VFY] PubKey Not Found (Commit) Addr: [%s]", msg.Addr)
 		return
@@ -351,9 +356,7 @@ func handleReceiveCommit(w http.ResponseWriter, r *http.Request) {
 //////////////////////////////////////////////////
 
 func broadcast(path string, data any) {
-
 	body, _ := json.Marshal(data)
-
 	nodes := append(peersSnapshot(), self)
 
 	for _, node := range nodes {

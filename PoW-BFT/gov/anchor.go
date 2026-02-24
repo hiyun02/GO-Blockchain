@@ -17,6 +17,7 @@ import (
 )
 
 // Gov에서 Hos가 제출한 앵커를 수신하고 검증한 후 pending 추가함수 호출(부트노드만 수행)
+// Gov에서 Hos가 제출한 앵커를 수신하고 검증한 후 pending 추가 (상위 체인용 수정본)
 func addAnchor(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		HosID   string `json:"hos_id"`
@@ -31,84 +32,95 @@ func addAnchor(w http.ResponseWriter, r *http.Request) {
 	}
 	defer r.Body.Close()
 
-	// Hos의 공개키 가져오기
+	// 1. Hos의 공개키 가져오기
 	resp, err := http.Get("http://" + req.HosBoot + "/getPublicKey")
 	if err != nil {
+		log.Printf("[ANCHOR][ERROR] failed to fetch public key from %s: %v", req.HosBoot, err)
 		http.Error(w, "failed to fetch public key", 500)
 		return
 	}
 	defer resp.Body.Close()
 
-	// Hos 노드로부터 전송받은 공개키(PEM 형식)를 전체 읽음
-	pubPem, _ := io.ReadAll(resp.Body)
+	pubPem, err := io.ReadAll(resp.Body)
+	if err != nil {
+		http.Error(w, "failed to read public key", 500)
+		return
+	}
 
-	// PEM 포맷(-----BEGIN PUBLIC KEY-----)을 디코딩하여 DER 형식으로 변환
+	// 2. ECDSA 공개키 파싱 (하위 체인과 규격 일치)
 	block, _ := pem.Decode(pubPem)
+	if block == nil {
+		log.Printf("[ANCHOR][ERROR] failed to decode PEM for %s", req.HosID)
+		http.Error(w, "invalid public key pem", 400)
+		return
+	}
+	pubIfc, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		log.Printf("[ANCHOR][ERROR] failed to parse PKIX for %s: %v", req.HosID, err)
+		http.Error(w, "invalid public key format", 400)
+		return
+	}
+	pubKey, ok := pubIfc.(*ecdsa.PublicKey)
+	if !ok {
+		http.Error(w, "not an ecdsa public key", 400)
+		return
+	}
 
-	// DER 포맷을 실제 Go에서 사용 가능한 공개키 객체(interface)로 파싱
-	pubIfc, _ := x509.ParsePKIXPublicKey(block.Bytes)
-
-	// 파싱된 공개키를 ECDSA 공개키 타입으로 변환 (타입 단언)
-	pubKey := pubIfc.(*ecdsa.PublicKey)
-
-	// 메시지는 문자열 그대로 사용
+	// 3. 서명 검증을 위한 해시 계산 (하위 체인 전송 규격과 일치)
 	msg := []byte(req.Root + "|" + req.Ts)
 	hash := sha256.Sum256(msg)
 
-	// DER 디코딩
-	sigBytes, _ := hex.DecodeString(req.Sig)
-
-	type ecdsaSignature struct {
-		R, S *big.Int
+	// 4. DER 디코딩 및 검증 (가장 중요한 수정 부분)
+	sigBytes, err := hex.DecodeString(req.Sig)
+	if err != nil {
+		http.Error(w, "invalid hex signature", 400)
+		return
 	}
 
-	var sigStruct ecdsaSignature
-	_, err = asn1.Unmarshal(sigBytes, &sigStruct)
-	if err != nil {
+	var sigStruct struct {
+		R, S *big.Int
+	}
+	// 하위 체인에서 asn1.Marshal로 보낸 데이터를 정확히 언마샬링함
+	if _, err := asn1.Unmarshal(sigBytes, &sigStruct); err != nil {
+		log.Printf("[ANCHOR][ERROR] ASN1 Unmarshal fail for %s: %v", req.HosID, err)
 		http.Error(w, "invalid signature format", 403)
 		return
 	}
 
-	valid := ecdsa.Verify(pubKey, hash[:], sigStruct.R, sigStruct.S)
-
-	if !valid {
+	// 실제 ECDSA 검증 수행
+	if !ecdsa.Verify(pubKey, hash[:], sigStruct.R, sigStruct.S) {
+		log.Printf("[ANCHOR][INVALID] Signature verification failed from %s", req.HosID)
 		http.Error(w, "invalid signature", 403)
-		log.Printf("[ANCHOR][INVALID] rejected from %s", req.HosID)
 		return
 	}
 
-	// AnchorRecord 구성 (계약 정보는 현재 비워둠)
+	// 5. AnchorRecord 구성 및 저장 (기본 로직 유지)
 	ar := AnchorRecord{
 		HosID:            req.HosID,
-		ContractSnapshot: ContractData{}, // 빈 계약 정보
+		ContractSnapshot: ContractData{},
 		LowerRoot:        req.Root,
-		AccessCatalog:    []string{}, // 비어있는 접근 리스트
+		AccessCatalog:    []string{},
 		AnchorTimestamp:  req.Ts,
 	}
 
-	// pending 에 anchor 객체 전체 추가
 	appendPending([]AnchorRecord{ar})
 	log.Printf("[ANCHOR] Pending anchor added: %+v", ar)
 
-	// AnchorRoot LevelDB 저장
 	if err := saveAnchorToDB(req.HosID, req.Root, req.Ts); err != nil {
 		log.Printf("[ANCHOR][ERROR] Failed to save anchor to DB for %s", req.HosID)
 	} else {
 		log.Printf("[ANCHOR][DB] Success to save anchor to DB for %s", req.HosID)
 	}
 
-	// 전역변수에 저장
 	anchorMu.Lock()
 	anchorMap[req.HosID] = AnchorInfo{Root: req.Root, Ts: req.Ts}
 	anchorMu.Unlock()
 
-	// 앵커 저장
-	log.Printf("[ANCHOR] Verified & adding anchor from Hos Chain ... %s : %s)", req.HosID, anchorMap[req.HosID].Root)
+	log.Printf("[ANCHOR] Verified & adding anchor from Hos Chain %s : %s", req.HosID, req.Root)
 
-	// 새로 수신한 Hos 부트노드의 주소가, 기존 Hos체인의 부트노드 주소와 다른 경우
+	// 부트노드 정보 업데이트 체크
 	if req.HosBoot != getHosBootAddr(req.HosID) {
-		// 송신한 Hos체인의 HosID와 부트노드 주소를 저장한 후 다른 gov 노드에 전파함
-		log.Printf("[ANCHOR] Call broadcastNewHosBoot() for store %s : %s to HosBootMap ... )", req.HosID, req.HosBoot)
+		log.Printf("[ANCHOR] New HosBoot addr detected %s : %s", req.HosID, req.HosBoot)
 		broadcastNewHosBoot(req.HosID, req.HosBoot)
 	}
 	w.WriteHeader(http.StatusOK)

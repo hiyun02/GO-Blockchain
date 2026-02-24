@@ -5,7 +5,6 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/sha256"
 	"crypto/x509"
 	"encoding/asn1"
 	"encoding/hex"
@@ -60,23 +59,24 @@ func getPublicKey(w http.ResponseWriter, r *http.Request) {
 }
 
 // 앵커 서명 생성 (ECDSA)
-func makeAnchorSignature(privPem string, root string, ts string) string {
+func makeAnchorSignature(privPem, hashStr, _ string) string {
 	block, _ := pem.Decode([]byte(privPem))
+	if block == nil {
+		return ""
+	}
 	priv, _ := x509.ParseECPrivateKey(block.Bytes)
 
-	// 메시지는 문자열 그대로 사용
-	msg := []byte(root + "|" + ts)
-	hash := sha256.Sum256(msg)
+	hashBytes, _ := hex.DecodeString(hashStr)
 
-	r, s, _ := ecdsa.Sign(rand.Reader, priv, hash[:])
-
-	// DER 인코딩(ECDSA 표준)
-	type ecdsaSignature struct {
-		R, S *big.Int
+	// [수정 포인트 3] 표준 ECDSA 서명 생성 및 DER 인코딩
+	r, s, err := ecdsa.Sign(rand.Reader, priv, hashBytes)
+	if err != nil {
+		return ""
 	}
-	der, _ := asn1.Marshal(ecdsaSignature{R: r, S: s})
 
-	return hex.EncodeToString(der)
+	sigStruct := struct{ R, S *big.Int }{r, s}
+	derSig, _ := asn1.Marshal(sigStruct)
+	return hex.EncodeToString(derSig)
 }
 
 // Gov로 MerkleRoot 제출 (부트노드에서만 실행됨)
@@ -228,28 +228,16 @@ func verifyECDSA(pubPemStr string, hash []byte, sigHex string) bool {
 	if block == nil {
 		return false
 	}
+	pubInterface, _ := x509.ParsePKIXPublicKey(block.Bytes)
+	pub := pubInterface.(*ecdsa.PublicKey)
 
-	pubIfc, err := x509.ParsePKIXPublicKey(block.Bytes)
-	if err != nil {
-		return false
-	}
-	pubKey, ok := pubIfc.(*ecdsa.PublicKey)
-	if !ok {
-		return false
-	}
+	sigBytes, _ := hex.DecodeString(sigHex)
 
-	sigBytes, err := hex.DecodeString(sigHex)
-	if err != nil {
+	// [수정 포인트 4] DER 인코딩된 서명을 다시 R, S로 언마샬링
+	var sigStruct struct{ R, S *big.Int }
+	if _, err := asn1.Unmarshal(sigBytes, &sigStruct); err != nil {
 		return false
 	}
 
-	var sigStruct struct {
-		R, S *big.Int
-	}
-	_, err = asn1.Unmarshal(sigBytes, &sigStruct)
-	if err != nil {
-		return false
-	}
-
-	return ecdsa.Verify(pubKey, hash, sigStruct.R, sigStruct.S)
+	return ecdsa.Verify(pub, hash, sigStruct.R, sigStruct.S)
 }
