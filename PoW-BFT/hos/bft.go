@@ -166,9 +166,9 @@ func startConsensusWatcher() {
 	}
 }
 
-//////////////////////////////////////////////////
+// ////////////////////////////////////////////////
 // PRE-PREPARE
-//////////////////////////////////////////////////
+// ////////////////////////////////////////////////
 func handleBftStart(w http.ResponseWriter, r *http.Request) {
 	var msg struct {
 		View  int        `json:"view"`
@@ -339,15 +339,20 @@ func handleReceiveCommit(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("[PBFT][COMMIT] collected=%d/%d view=%d", vs.Commit.count(), quorumSize(), msg.View)
 
-	if vs.Commit.count() >= quorumSize() && vs.Phase == PhaseCommit && !vs.Finalized {
+	// Phase 확인 조건을 빼고, 쿼럼 달성 시 즉시 확정 프로세스 진행
+	if vs.Commit.count() >= quorumSize() && !vs.Finalized {
+		vs.Finalized = true // 중복 진입 방지 위해 먼저 true 설정
 		vs.Phase = PhaseFinal
-		vs.Finalized = true
 		vs.Block.Signatures = vs.Commit.all()
 
 		log.Printf("[PBFT][FINALIZED] view=%d hash=%s", msg.View, vs.Block.BlockHash)
+
+		// 블록 저장 및 플래그 해제
 		onBlockReceived(vs.Block)
 		deleteView(msg.View)
 		consensusInProgress.Store(false)
+
+		log.Printf("[PBFT] Consensus reset for next block")
 	}
 }
 
