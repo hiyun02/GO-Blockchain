@@ -173,9 +173,26 @@ func handleReceivePrepare(w http.ResponseWriter, r *http.Request) {
 
 	vs := getOrCreateView(msg.View)
 	vs.mu.Lock()
+
+	// [레이스 컨디션 방지] 블록 정보가 아직 도착 안 했으면 최대 3번(30ms)까지 재시도
+	if vs.Block.BlockHash == "" {
+		for i := 0; i < 3; i++ {
+			vs.mu.Unlock()
+			time.Sleep(10 * time.Millisecond)
+			vs.mu.Lock()
+			if vs.Block.BlockHash != "" {
+				break
+			}
+		}
+	}
 	defer vs.mu.Unlock()
 
-	// [수정] msg.Block.BlockHash -> vs.Block.BlockHash로 수정
+	// 리더로부터 BftStart(Pre-Prepare)를 아예 못 받은 경우
+	if vs.Block.BlockHash == "" {
+		return
+	}
+
+	// 해시 미스매치 검사
 	if vs.Block.BlockHash != msg.Hash {
 		log.Printf("[DEBUG] Hash mismatch in Prepare: Expected %s, Got %s", vs.Block.BlockHash, msg.Hash)
 		return
@@ -206,7 +223,6 @@ func handleReceivePrepare(w http.ResponseWriter, r *http.Request) {
 		vs.Phase = PhaseCommit
 		myPriv, _ := getMeta("meta_hos_privkey")
 
-		// [수정] vs.Block.BlockHash를 사용하여 자신의 Commit 서명 생성
 		sig := makeAnchorSignature(myPriv, vs.Block.BlockHash, "")
 		vs.Commit.add(self, sig)
 

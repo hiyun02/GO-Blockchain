@@ -297,18 +297,36 @@ func selfID() string {
 func appendBlockLog(block LowerBlock) {
 	f, err := os.OpenFile("block_history.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
-		log.Printf("[LOG][ERROR] cannot open blockHistory file: %v", err)
+		log.Printf("[LOG][ERROR] 파일 열기 실패: %v", err)
 		return
 	}
 	defer f.Close()
-	// txt 파일에 저장할 내용
-	line := fmt.Sprintf("Block #%02d, Entries: %04d, EndStamp: %s, Elapsed: %f \n",
-		block.Index, len(block.Entries), time.Unix(time.Now().Unix(), 0).Format(time.RFC3339), block.Elapsed)
+
+	// 1 & 2번 지표: block.go에서 만든 함수 호출
+	totalMB, payloadRatio := block.GetSizeMetrics()
+
+	// 3번 지표: Latency 계산 (제안 시점 Timestamp vs 현재 로깅 시점)
+	startTime, err := time.Parse(time.RFC3339Nano, block.Timestamp)
+	var latency float64 = 0
+	if err == nil {
+		latency = time.Since(startTime).Seconds()
+	}
+	// Index: 블록번호
+	// Entries: 데이터 건수
+	// Size: 블록 전체 용량 (MB)
+	// Payload: 순수 데이터 비중 (%) -> 100 - 헤더비율
+	// Latency: 합의 및 저장 소요시간 (초)
+	line := fmt.Sprintf("Idx:%d, Entries:%d, Size:%.6fMB, Payload:%.2f%%, Latency:%.4fs\n",
+		block.Index,
+		len(block.Entries),
+		totalMB,
+		payloadRatio,
+		latency,
+	)
 
 	if _, err := f.WriteString(line); err != nil {
-		log.Printf("[LOG][ERROR] cannot write blockHistory: %v", err)
+		log.Printf("[LOG][ERROR] 쓰기 실패: %v", err)
 	}
-	log.Printf("[LOG][WRITE] Success to Write BlockHistory: %v", err)
 }
 
 // 로컬 체인을 완전히 초기화하고 제네시스 블록만 재생성

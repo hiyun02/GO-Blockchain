@@ -2,7 +2,6 @@ package main
 
 import (
 	"crypto/ecdsa"
-	"crypto/sha256"
 	"crypto/x509"
 	"encoding/asn1"
 	"encoding/hex"
@@ -17,7 +16,7 @@ import (
 )
 
 // Gov에서 Hos가 제출한 앵커를 수신하고 검증한 후 pending 추가함수 호출(부트노드만 수행)
-// Gov에서 Hos가 제출한 앵커를 수신하고 검증한 후 pending 추가 (상위 체인용 수정본)
+// Gov에서 Hos가 제출한 앵커를 수신하고 검증한 후 pending 추가 (상위 체인용 최종 수정본)
 func addAnchor(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		HosID   string `json:"hos_id"`
@@ -66,11 +65,16 @@ func addAnchor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 3. 서명 검증을 위한 해시 계산 (하위 체인 전송 규격과 일치)
-	msg := []byte(req.Root + "|" + req.Ts)
-	hash := sha256.Sum256(msg)
+	// 3. 서명 검증을 위한 데이터 처리 (하위체인의 makeAnchorSignature 규격과 일치)
+	// 하부체인에서는 MerkleRoot(Hex문자열)를 DecodeString하여 나온 바이트 그대로 서명함
+	hash, err := hex.DecodeString(req.Root)
+	if err != nil {
+		log.Printf("[ANCHOR][ERROR] Invalid Root hex from %s: %v", req.HosID, err)
+		http.Error(w, "invalid root format", 400)
+		return
+	}
 
-	// 4. DER 디코딩 및 검증 (가장 중요한 수정 부분)
+	// 4. DER 디코딩 및 검증
 	sigBytes, err := hex.DecodeString(req.Sig)
 	if err != nil {
 		http.Error(w, "invalid hex signature", 400)
@@ -80,21 +84,21 @@ func addAnchor(w http.ResponseWriter, r *http.Request) {
 	var sigStruct struct {
 		R, S *big.Int
 	}
-	// 하위 체인에서 asn1.Marshal로 보낸 데이터를 정확히 언마샬링함
 	if _, err := asn1.Unmarshal(sigBytes, &sigStruct); err != nil {
 		log.Printf("[ANCHOR][ERROR] ASN1 Unmarshal fail for %s: %v", req.HosID, err)
 		http.Error(w, "invalid signature format", 403)
 		return
 	}
 
-	// 실제 ECDSA 검증 수행
-	if !ecdsa.Verify(pubKey, hash[:], sigStruct.R, sigStruct.S) {
+	// [중요] 하위체인에서 이미 해시된 데이터를 서명했으므로, 추가 해싱(sha256.Sum256) 없이 직접 검증
+	if !ecdsa.Verify(pubKey, hash, sigStruct.R, sigStruct.S) {
 		log.Printf("[ANCHOR][INVALID] Signature verification failed from %s", req.HosID)
+		log.Printf("[DEBUG] Verify Fail - Root: %s, Sig: %s...", req.Root, req.Sig[:10])
 		http.Error(w, "invalid signature", 403)
 		return
 	}
 
-	// 5. AnchorRecord 구성 및 저장 (기본 로직 유지)
+	// 5. AnchorRecord 구성 및 저장
 	ar := AnchorRecord{
 		HosID:            req.HosID,
 		ContractSnapshot: ContractData{},
@@ -104,19 +108,15 @@ func addAnchor(w http.ResponseWriter, r *http.Request) {
 	}
 
 	appendPending([]AnchorRecord{ar})
-	log.Printf("[ANCHOR] Pending anchor added: %+v", ar)
+	log.Printf("[ANCHOR] Verified & Pending anchor added: %+v", ar)
 
 	if err := saveAnchorToDB(req.HosID, req.Root, req.Ts); err != nil {
 		log.Printf("[ANCHOR][ERROR] Failed to save anchor to DB for %s", req.HosID)
-	} else {
-		log.Printf("[ANCHOR][DB] Success to save anchor to DB for %s", req.HosID)
 	}
 
 	anchorMu.Lock()
 	anchorMap[req.HosID] = AnchorInfo{Root: req.Root, Ts: req.Ts}
 	anchorMu.Unlock()
-
-	log.Printf("[ANCHOR] Verified & adding anchor from Hos Chain %s : %s", req.HosID, req.Root)
 
 	// 부트노드 정보 업데이트 체크
 	if req.HosBoot != getHosBootAddr(req.HosID) {

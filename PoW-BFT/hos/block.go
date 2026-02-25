@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"log"
 	"strings"
 	"time"
@@ -17,7 +18,7 @@ type LowerBlock struct {
 	Index      int            `json:"index"`       // 블록 번호
 	HosID      string         `json:"hos_id"`      // Hos 체인 식별자
 	PrevHash   string         `json:"prev_hash"`   // 이전 블록의 해시
-	Timestamp  string         `json:"timestamp"`   // 생성 시간 (RFC3339 형식)
+	Timestamp  string         `json:"timestamp"`   // 생성 시간 (RFC3339Nano 권장)
 	Entries    []ClinicRecord `json:"entries"`     // 블록 내 진료 정보 목록
 	MerkleRoot string         `json:"merkle_root"` // Entries의 해시 기반 머클루트
 	Proposer   string         `json:"proposer"`    // 해당 블록의 합의 집행자
@@ -76,7 +77,7 @@ func createProposedBlock(entries []ClinicRecord) LowerBlock {
 		Index:      height + 1,
 		HosID:      selfID(),
 		PrevHash:   prevBlock.BlockHash,
-		Timestamp:  time.Now().UTC().Format(time.RFC3339),
+		Timestamp:  time.Now().UTC().Format(time.RFC3339Nano),
 		Entries:    entries,
 		Proposer:   self,
 		Signatures: []string{},
@@ -100,4 +101,23 @@ func createProposedBlock(entries []ClinicRecord) LowerBlock {
 	newBlock.BlockHash = newBlock.computeHash()
 
 	return newBlock
+}
+func (b LowerBlock) GetSizeMetrics() (totalMB float64, payloadRatio float64) {
+	// 1. 블록 전체를 직렬화하여 크기 측정 (Bytes)
+	fullBytes, _ := json.Marshal(b)
+	totalBytes := float64(len(fullBytes))
+
+	// 2. 헤더 부분만 따로 측정하기 위해 복사본 생성 (Entries, LeafHashes 제외)
+	headerOnly := b
+	headerOnly.Entries = nil
+	headerOnly.LeafHashes = nil
+	headerBytes, _ := json.Marshal(headerOnly)
+	headerSize := float64(len(headerBytes))
+
+	if totalBytes > 0 {
+		totalMB = totalBytes / (1024 * 1024)           // 전체 용량 (MB)
+		headerRatio := (headerSize / totalBytes) * 100 // 헤더 비중 (%)
+		payloadRatio = 100 - headerRatio               // 페이로드 비중 (%)
+	}
+	return totalMB, payloadRatio
 }
