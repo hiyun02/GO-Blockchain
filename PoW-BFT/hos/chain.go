@@ -116,7 +116,7 @@ func onBlockReceived(lb LowerBlock) error {
 
 	// 5. [중요] 펜딩 큐 비우기
 	// 이미 블록에 포함된 데이터들이므로 메모리에서 제거해야 다음 블록에 중복되지 않음
-	// 리더 노드라면 getPending()에서 이미 비워졌겠지만, 일반 노드들을 위해 명시적 초기화
+	// 리더 노드라면 popPending()에서 이미 비워졌겠지만, 일반 노드들을 위해 명시적 초기화
 	if len(ch.pending) > 0 {
 		// 간단하게 전체 비우거나, 블록에 포함된 만큼만 제거 (실험 시에는 전체 비우기가 안전)
 		ch.pending = []ClinicRecord{}
@@ -208,7 +208,7 @@ func appendPending(entries []ClinicRecord) {
 }
 
 // 체인의 메모리풀인 pending에 컨텐츠 내용 비우고 가져오기
-func getPending() []ClinicRecord {
+func popPending() []ClinicRecord {
 	ch.pendingMu.Lock()
 	defer ch.pendingMu.Unlock()
 	// 복사본 생성
@@ -220,11 +220,11 @@ func getPending() []ClinicRecord {
 	return entries
 }
 
-// 메모리풀이 비어있는 지 확인
-func pendingIsEmpty() bool {
+// 메모리풀의 엔트리 개수 확인
+func getPendingCnt() int {
 	ch.pendingMu.Lock()
 	defer ch.pendingMu.Unlock()
-	return len(ch.pending) == 0
+	return len(ch.pending)
 }
 
 // 간단 로그 출력 함수

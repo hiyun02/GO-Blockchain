@@ -95,18 +95,35 @@ func quorumSize() int {
 
 func startConsensusWatcher() {
 	ticker := time.NewTicker(time.Second)
+	var lastConsensusTime = time.Now()
+
 	for range ticker.C {
-		if self != boot || consensusInProgress.Load() || pendingIsEmpty() {
+		// 부트노드가 아니거나 이미 합의 중이라면 즉시 패스
+		if self != boot || consensusInProgress.Load() {
+			continue
+		}
+		// 펜딩 개수 확인 (비우지 않고 개수만 체크)
+		pendingCnt := getPendingCnt()
+		if pendingCnt == 0 {
 			continue
 		}
 
-		height, _ := getLatestHeight()
-		view := height + 1
+		// 개수가 100개 이상이거나, 마지막 합의 후 10초 경과
+		timeSinceLastConsensus := time.Since(lastConsensusTime)
+		shouldStart := pendingCnt >= 100 || timeSinceLastConsensus >= 10*time.Second
 
-		records := getPending()
+		if !shouldStart {
+			// 아직 조건 미달이므로 대기
+			continue
+		}
+		records := popPending()
+		// 그사이 비워졌을 경우를 대비한 방어 로직
 		if len(records) == 0 {
 			continue
 		}
+		// PBFT 합의 프로세스 진입
+		height, _ := getLatestHeight()
+		view := height + 1
 
 		vs := getOrCreateView(view)
 		vs.mu.Lock()
@@ -115,14 +132,32 @@ func startConsensusWatcher() {
 			continue
 		}
 
+		// 제안 블록 생성 및 상태 전이
 		block := createProposedBlock(records)
 		vs.Block = block
 		vs.Phase = PhasePrePrepare
 		vs.mu.Unlock()
 
+		// 합의 진행 상태 원자적 갱신
 		consensusInProgress.Store(true)
-		log.Printf("[PBFT][START] View=%d, Hash=%s", view, block.BlockHash)
+
+		// 합의 이유(Reason) 결정 및 로깅
+		reason := "Timeout"
+		if len(records) >= 100 {
+			reason = "Full-Batch"
+		}
+		log.Printf("[PBFT][START] View=%d, Entries=%d (Reason: %s, Elapsed: %.1fs)",
+			view,
+			len(records),
+			reason,
+			timeSinceLastConsensus.Seconds(),
+		)
+
+		// 합의 시작 신호 브로드캐스트
 		broadcast("/bft/start", map[string]any{"view": view, "block": block})
+
+		// 마지막 합의 시간 갱신 (반드시 루프 마지막이나 시작 시점에 갱신 확인)
+		lastConsensusTime = time.Now()
 	}
 }
 

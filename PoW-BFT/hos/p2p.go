@@ -314,7 +314,7 @@ func startNetworkWatcher() {
 //
 //		// 이미 채굴 중이거나 메모리풀이 비어있지 않으면 수행하지 않음
 //		// 블록 생성이 기대되지 않는 상황에서 혼자 체인이 짧은 경우를 판별하기 위함
-//		//if isMining.Load() || !pendingIsEmpty() {
+//		//if isMining.Load() || !getPendingCnt == 0() {
 //		//	continue
 //		//}
 //
