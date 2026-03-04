@@ -87,46 +87,31 @@ func onBlockReceived(lb LowerBlock) error {
 	chainMu.Lock()
 	defer chainMu.Unlock()
 
-	// 1. 블록 중복 저장 방지 (이미 저장된 인덱스면 스킵)
+	// 블록 중복 저장 방지 (이미 저장된 인덱스면 스킵)
 	currentHeight, _ := getLatestHeight()
 	if lb.Index <= currentHeight && currentHeight != 0 {
 		log.Printf("[CHAIN] Block #%d already processed. Skipping.", lb.Index)
 		return nil
 	}
-
-	// 2. PBFT에서 이미 검증되었으므로, 복잡한 재검증(verifyConsensusEvidence)은 스킵하거나
-	// 로그만 남기고 통과시킵니다. (실험의 속도와 정확도를 위해)
-	log.Printf("[CHAIN] Processing Consensus Block #%d", lb.Index)
-
-	// 3. 로컬 장부 반영 (DB 저장)
+	// 로컬 장부 반영 (DB 저장)
 	if err := saveBlockToDB(lb); err != nil {
 		log.Printf("[CHAIN][ERROR] saveBlockToDB failed: %v", err)
 		return fmt.Errorf("save block: %w", err)
 	}
 
-	// 4. 인덱스 및 최신 높이 업데이트 (이게 되어야 View가 올라감)
+	// 인덱스 및 최신 높이 업데이트
 	if err := updateIndicesForBlock(lb); err != nil {
 		return fmt.Errorf("update indices: %w", err)
 	}
 	if err := setLatestHeight(lb.Index); err != nil {
 		return fmt.Errorf("set height: %w", err)
 	}
-
 	ch.lastBlockTime = time.Now()
 
-	// 5. [중요] 펜딩 큐 비우기
-	// 이미 블록에 포함된 데이터들이므로 메모리에서 제거해야 다음 블록에 중복되지 않음
-	// 리더 노드라면 popPending()에서 이미 비워졌겠지만, 일반 노드들을 위해 명시적 초기화
-	if len(ch.pending) > 0 {
-		// 간단하게 전체 비우거나, 블록에 포함된 만큼만 제거 (실험 시에는 전체 비우기가 안전)
-		ch.pending = []ClinicRecord{}
-		log.Printf("[CHAIN][PENDING] Memory pool cleared after block #%d", lb.Index)
-	}
-
-	// 6. 합의 상태 초기화
+	// 합의 상태 초기화
 	consensusInProgress.Store(false)
 
-	// 7. 부트노드라면 상위 체인(Gov)으로 앵커링 전송
+	// 부트노드라면 상위 체인(Gov)으로 앵커링 전송
 	if self == boot {
 		go submitAnchor(lb)
 		logInfo("[BFT-FINALITY] Block #%d anchored to Gov Chain", lb.Index)
