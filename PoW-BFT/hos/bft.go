@@ -19,6 +19,8 @@ const (
 	PhasePrepare
 	PhaseCommit
 	PhaseFinal
+	ConsensusBatchSize = 200
+	ConsensusTimeout   = 10
 )
 
 type voteCollector struct {
@@ -108,9 +110,15 @@ func startConsensusWatcher() {
 			continue
 		}
 
-		// 개수가 100개 이상이거나, 마지막 합의 후 10초 경과
+		// 메모리풀의 엔트리 수가 임계값 이상이거나, 마지막 합의 시점부터 임계대기시간 이후로 지났을 때 합의 수행
 		timeSinceLastConsensus := time.Since(lastConsensusTime)
-		shouldStart := pendingCnt >= 100 || timeSinceLastConsensus >= 10*time.Second
+		shouldStart := pendingCnt >= ConsensusBatchSize || timeSinceLastConsensus >= ConsensusTimeout*time.Second
+
+		reason := "Timeout"
+		// 합의 이유(Reason) 결정
+		if pendingCnt >= ConsensusBatchSize {
+			reason = "Full-Batch"
+		}
 
 		if !shouldStart {
 			// 아직 조건 미달이므로 대기
@@ -141,11 +149,6 @@ func startConsensusWatcher() {
 		// 합의 진행 상태 원자적 갱신
 		consensusInProgress.Store(true)
 
-		// 합의 이유(Reason) 결정 및 로깅
-		reason := "Timeout"
-		if len(records) >= 100 {
-			reason = "Full-Batch"
-		}
 		log.Printf("[PBFT][START] View=%d, Entries=%d (Reason: %s, Elapsed: %.1fs)",
 			view,
 			len(records),
@@ -209,8 +212,9 @@ func handleReceivePrepare(w http.ResponseWriter, r *http.Request) {
 	vs := getOrCreateView(msg.View)
 	vs.mu.Lock()
 
-	// [레이스 컨디션 방지] 블록 정보가 아직 도착 안 했으면 최대 3번(30ms)까지 재시도
+	// 블록 정보가 아직 도착 안 했으면 최대 3번(30ms)까지 재시도
 	if vs.Block.BlockHash == "" {
+		log.Printf("[PBFT][PREPARE] Receive Prepare for View %d", msg.View)
 		for i := 0; i < 3; i++ {
 			vs.mu.Unlock()
 			time.Sleep(10 * time.Millisecond)
@@ -322,10 +326,6 @@ func handleReceiveCommit(w http.ResponseWriter, r *http.Request) {
 		onBlockReceived(vs.Block)
 
 		deleteView(msg.View)
-
-		go func() {
-			time.Sleep(100 * time.Millisecond)
-		}()
 	}
 }
 
