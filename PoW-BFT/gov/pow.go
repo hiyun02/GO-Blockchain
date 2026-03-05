@@ -46,12 +46,12 @@ func startMiningWatcher() {
 	for range t.C {
 
 		// 이미 채굴 중이거나 메모리풀이 비었으면 아무것도 안함
-		if isMining.Load() || pendingIsEmpty() {
+		if isMining.Load() || getPendingCnt() == 0 {
 			continue
 		}
 
 		// 메모리풀에 레코드가 있고 채굴 중이 아니면 채굴 시작 signal
-		records := getPending()
+		records := popPending()
 		log.Printf("[WATCHER] Pending detected => Starting mining (%d anchors)", len(records))
 		sendMiningSignal(records)
 	}

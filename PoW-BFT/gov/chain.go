@@ -129,7 +129,7 @@ func appendPending(records []AnchorRecord) {
 }
 
 // 체인의 메모리풀인 pending에 앵커 내용 비우고 가져오기
-func getPending() []AnchorRecord {
+func popPending() []AnchorRecord {
 	ch.pendingMu.Lock()
 	defer ch.pendingMu.Unlock()
 	// 복사본 생성
@@ -141,13 +141,12 @@ func getPending() []AnchorRecord {
 	return entries
 }
 
-// 메모리풀이 비어있는 지 확인
-func pendingIsEmpty() bool {
+// 메모리풀의 엔트리 개수 확인
+func getPendingCnt() int {
 	ch.pendingMu.Lock()
 	defer ch.pendingMu.Unlock()
-	return len(ch.pending) == 0
+	return len(ch.pending)
 }
-
 func logInfo(format string, args ...interface{}) {
 	fmt.Printf("[INFO] "+format+"\n", args...)
 }

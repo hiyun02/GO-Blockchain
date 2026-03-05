@@ -108,7 +108,7 @@ func addAnchor(w http.ResponseWriter, r *http.Request) {
 	}
 
 	appendPending([]AnchorRecord{ar})
-	log.Printf("[ANCHOR] Verified & Pending anchor added: %+v", ar)
+	log.Printf("[ANCHOR] Verified & Pending anchor added")
 
 	if err := saveAnchorToDB(req.HosID, req.Root, req.Ts); err != nil {
 		log.Printf("[ANCHOR][ERROR] Failed to save anchor to DB for %s", req.HosID)

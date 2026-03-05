@@ -97,17 +97,22 @@ func quorumSize() int {
 
 func startConsensusWatcher() {
 	ticker := time.NewTicker(time.Second)
-	var lastConsensusTime = time.Now()
+	var lastConsensusTime time.Time // 초기화를 하지 않음
 
 	for range ticker.C {
-		// 부트노드가 아니거나 이미 합의 중이라면 즉시 패스
 		if self != boot || consensusInProgress.Load() {
 			continue
 		}
-		// 펜딩 개수 확인 (비우지 않고 개수만 체크)
+
 		pendingCnt := getPendingCnt()
 		if pendingCnt == 0 {
+			lastConsensusTime = time.Time{} // 데이터 없으면 시간 리셋
 			continue
+		}
+
+		// 첫 데이터가 들어왔을 때 기준 시간 설정
+		if lastConsensusTime.IsZero() {
+			lastConsensusTime = time.Now()
 		}
 
 		// 메모리풀의 엔트리 수가 임계값 이상이거나, 마지막 합의 시점부터 임계대기시간 이후로 지났을 때 합의 수행
