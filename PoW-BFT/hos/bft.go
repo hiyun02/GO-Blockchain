@@ -11,7 +11,10 @@ import (
 	"time"
 )
 
-var consensusInProgress atomic.Bool
+var (
+	consensusInProgress atomic.Bool
+	ConsensusBatchSize  = 200
+)
 
 const (
 	PhaseIdle int32 = iota
@@ -19,8 +22,7 @@ const (
 	PhasePrepare
 	PhaseCommit
 	PhaseFinal
-	ConsensusBatchSize = 200
-	ConsensusTimeout   = 10
+	ConsensusTimeout = 10
 )
 
 type voteCollector struct {
@@ -120,9 +122,21 @@ func startConsensusWatcher() {
 		shouldStart := pendingCnt >= ConsensusBatchSize || timeSinceLastConsensus >= ConsensusTimeout*time.Second
 
 		reason := "Timeout"
-		// 합의 이유(Reason) 결정
+		// 합의 이유(Reason)에 따른 기준값 변경
 		if pendingCnt >= ConsensusBatchSize {
+			log.Printf("트랜잭션이 많아서 배치크기를 2배로 늘림")
 			reason = "Full-Batch"
+			ConsensusBatchSize *= 2
+			log.Printf("늘어난 배치크기 : %d", ConsensusBatchSize)
+		} else {
+			log.Printf("타임아웃")
+			if ConsensusBatchSize != 200 {
+				log.Printf("배치 크기가 200이 아니므로 절반으로 줄임")
+				ConsensusBatchSize /= 2
+				log.Printf("감소한 배치 크기 : %d", ConsensusBatchSize)
+			} else {
+				log.Printf("배치 크기가 200이므로 유지")
+			}
 		}
 
 		if !shouldStart {

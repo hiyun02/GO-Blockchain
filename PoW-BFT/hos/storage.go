@@ -321,7 +321,7 @@ func appendBlockLog(block LowerBlock) {
 		len(block.Entries),
 		totalMB,
 		payloadRatio,
-		time.Unix(time.Now().Unix(), 0).Format(time.RFC3339),
+		time.Unix(time.Now().Unix(), 0).Format("2026-03-16 15:04:05.000"),
 		latency,
 	)
 
