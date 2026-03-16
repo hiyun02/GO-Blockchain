@@ -111,6 +111,8 @@ func startConsensusWatcher() {
 		pendingCnt := getPendingCnt()
 		if pendingCnt == 0 {
 			lastConsensusTime = time.Time{} // 데이터 없으면 시간 리셋
+			ConsensusBatchSize = ConsensusBatchSizeMin
+			log.Printf("데이터가 앖으므로 배치 크기 초기화: %d", ConsensusBatchSize)
 			continue
 		}
 
