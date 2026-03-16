@@ -316,12 +316,12 @@ func appendBlockLog(block LowerBlock) {
 	// Size: 블록 전체 용량 (MB)
 	// Payload: 순수 데이터 비중 (%) -> 100 - 헤더비율
 	// Latency: 합의 및 저장 소요시간 (초)
-	line := fmt.Sprintf("Idx:%d, Entries:%d, Size:%.6fMB, Payload:%.2f%%, EndStamp: %s, Latency:%.4fs\n",
+	line := fmt.Sprintf("Idx:%d, Entries:%d, Size:%.6fMB, Payload:%.2f%%, EndStamp: %t, Latency:%.4fs\n",
 		block.Index,
 		len(block.Entries),
 		totalMB,
 		payloadRatio,
-		time.Unix(time.Now().Unix(), 0).Format(time.StampMilli),
+		time.Now().UTC().Format("15:04:05.000"),
 		latency,
 	)
 
