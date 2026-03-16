@@ -127,6 +127,15 @@ func startConsensusWatcher() {
 		MaxBatchYN := pendingCnt >= ConsensusBatchSize
 		TimeoutYN := timeSinceLastConsensus >= ConsensusTimeout*time.Second
 		shouldStart := MaxBatchYN || TimeoutYN
+		if !shouldStart {
+			// 아직 조건 미달이므로 대기
+			continue
+		}
+		records := popPending()
+		// 그사이 비워졌을 경우를 대비한 방어 로직
+		if len(records) == 0 {
+			continue
+		}
 
 		reason := "Timeout"
 		// 합의 이유(Reason)에 따른 기준값 변경
@@ -151,15 +160,6 @@ func startConsensusWatcher() {
 			}
 		}
 
-		if !shouldStart {
-			// 아직 조건 미달이므로 대기
-			continue
-		}
-		records := popPending()
-		// 그사이 비워졌을 경우를 대비한 방어 로직
-		if len(records) == 0 {
-			continue
-		}
 		// PBFT 합의 프로세스 진입
 		height, _ := getLatestHeight()
 		view := height + 1
