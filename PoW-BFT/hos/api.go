@@ -150,6 +150,7 @@ func RegisterAPI(mux *http.ServeMux, chain *LowerChain) {
 			"peers":      peersSnapshot(),
 			"Gov_boot":   getGovBoot(),
 			"last_hash":  lastHash,
+			"batch_size": ConsensusBatchSize,
 		})
 	})
 
