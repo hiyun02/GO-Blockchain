@@ -11,10 +11,7 @@ import (
 	"time"
 )
 
-var (
-	consensusInProgress atomic.Bool
-	ConsensusBatchSize  = 200
-)
+var consensusInProgress atomic.Bool
 
 const (
 	PhaseIdle int32 = iota
@@ -22,9 +19,8 @@ const (
 	PhasePrepare
 	PhaseCommit
 	PhaseFinal
-	ConsensusTimeout      = 10
-	ConsensusBatchSizeMin = 200
-	ConsensusBatchSizeMax = 1600
+	ConsensusBatchSize = 200
+	ConsensusTimeout   = 10
 )
 
 type voteCollector struct {
@@ -111,8 +107,6 @@ func startConsensusWatcher() {
 		pendingCnt := getPendingCnt()
 		if pendingCnt == 0 {
 			lastConsensusTime = time.Time{} // 데이터 없으면 시간 리셋
-			//ConsensusBatchSize = ConsensusBatchSizeMin
-			//log.Printf("데이터가 없으므로 배치 크기 초기화: %d", ConsensusBatchSize)
 			continue
 		}
 
@@ -123,10 +117,14 @@ func startConsensusWatcher() {
 
 		// 메모리풀의 엔트리 수가 임계값 이상이거나, 마지막 합의 시점부터 임계대기시간 이후로 지났을 때 합의 수행
 		timeSinceLastConsensus := time.Since(lastConsensusTime)
+		shouldStart := pendingCnt >= ConsensusBatchSize || timeSinceLastConsensus >= ConsensusTimeout*time.Second
 
-		MaxBatchYN := pendingCnt >= ConsensusBatchSize
-		TimeoutYN := timeSinceLastConsensus >= ConsensusTimeout*time.Second
-		shouldStart := MaxBatchYN || TimeoutYN
+		reason := "Timeout"
+		// 합의 이유(Reason) 결정
+		if pendingCnt >= ConsensusBatchSize {
+			reason = "Full-Batch"
+		}
+
 		if !shouldStart {
 			// 아직 조건 미달이므로 대기
 			continue
@@ -136,30 +134,6 @@ func startConsensusWatcher() {
 		if len(records) == 0 {
 			continue
 		}
-
-		reason := "Timeout"
-		// 합의 이유(Reason)에 따른 기준값 변경
-		if MaxBatchYN {
-			log.Printf("기준값보다 트랜잭션이 많으므로 합의 시작")
-			reason = "Full-Batch"
-			if ConsensusBatchSize < ConsensusBatchSizeMax {
-				log.Printf("현재 배치크기가 상한값보다는 작으므로 트랜잭션이 많으므로 2배 증가")
-				ConsensusBatchSize *= 2
-				log.Printf("늘어난 배치크기 : %d", ConsensusBatchSize)
-			} else {
-				log.Printf("배치 크기가 최댓값과 같으므로 늘리지 않음: %d", ConsensusBatchSize)
-			}
-		} else if TimeoutYN {
-			log.Printf("타임아웃이 발생했으므로 합의 시작")
-			if ConsensusBatchSize > ConsensusBatchSizeMin {
-				log.Printf("배치 크기가 하한값보다는 크므로 절반으로 줄임")
-				ConsensusBatchSize /= 2
-				log.Printf("감소한 배치 크기 : %d", ConsensusBatchSize)
-			} else {
-				log.Printf("배치 크기가 하한값과 같으므로 줄이지 않음")
-			}
-		}
-
 		// PBFT 합의 프로세스 진입
 		height, _ := getLatestHeight()
 		view := height + 1
