@@ -104,7 +104,7 @@ func handleMineStart(w http.ResponseWriter, r *http.Request) {
 			log.Printf("[POW][NODE] Mining aborted")
 			return
 		}
-		log.Printf("[PoW][NODE] ✅ Success New Block Mining #%d hash=%s elapsed=%ds", result.Header.Index, result.BlockHash[:12], result.Elapsed)
+		log.Printf("[PoW][NODE] ✅ Success New Block Mining #%d hash=%s elapsed=%.4fs", result.Header.Index, result.BlockHash[:12], result.Elapsed)
 		adjustDifficulty(result.Header.Index, result.Elapsed) // 채굴 난이도 조정
 		broadcastBlock(result, anchors)
 

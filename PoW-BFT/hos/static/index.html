@@ -21,7 +21,7 @@
 <body>
 
 <div class="container">
-    <h1>📦 Hos 체인 전체조회</h1>
+    <h1 id="title">📦 Hos 체인 전체조회</h1>
 
     <div id="status">
         <p>데이터를 불러오는 중...</p>
@@ -59,6 +59,7 @@
     fetch('/status')
         .then(res => res.json())
         .then(d => {
+            document.getElementById("title").textContent = `${d.hos_id} 체인 전체조회`;
             document.getElementById('status').innerHTML = `
                 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
                     <div>
@@ -69,7 +70,7 @@
                     <div>
                         <p><b>🚀 부트노드:</b> ${d.is_boot ? '✅ (본인)' : d.bootAddr}</p>
                         <p><b>🕒 시작 시간:</b> ${new Date(d.started_at).toLocaleString()}</p>
-                        <p><b>🔗 Gov 부트:</b> ${d.Gov_boot}</p>
+                        <p><b>🔗 Gov 부트:</b> ${d.gov_boot}</p>
                         <p><b>✅ 합의 배치 크기:</b> ${d.batch_size}</p>
                     </div>
                 </div>
