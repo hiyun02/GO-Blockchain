@@ -1,0 +1,110 @@
+#!/bin/bash
+
+set -e
+
+HOS_ID="Hos-C"
+PREFIX="hos-C"
+BOOT_NODE="${PREFIX}-boot"
+MAX_NODE_INDEX=15
+
+TARGET_TOTAL="$1"
+
+if [ -z "$TARGET_TOTAL" ]; then
+    echo "사용법: $0 <target_total>"
+    echo "예시:"
+    echo "  $0 12   # boot + 01~11 유지"
+    echo "  $0 8    # boot + 01~07 유지"
+    exit 1
+fi
+
+if [ "$TARGET_TOTAL" -lt 1 ] || [ "$TARGET_TOTAL" -gt 16 ]; then
+    echo "❌ target_total은 1~16 사이여야 합니다."
+    echo "현재 구조: boot 1개 + 일반 노드 01~15 = 총 16개"
+    exit 1
+fi
+
+KEEP_LAST_INDEX=$((TARGET_TOTAL - 1))
+
+echo "========== [설정 확인] =========="
+echo "HOS_ID          : $HOS_ID"
+echo "목표 컨테이너 수 : $TARGET_TOTAL"
+echo "유지 대상        : $BOOT_NODE + ${PREFIX}-01 ~ $(printf "${PREFIX}-%02d" "$KEEP_LAST_INDEX")"
+echo "삭제 대상        : $(printf "${PREFIX}-%02d" $((KEEP_LAST_INDEX + 1))) ~ $(printf "${PREFIX}-%02d" "$MAX_NODE_INDEX")"
+echo
+
+echo "========== [0] 유지 대상 컨테이너 존재 여부 확인 =========="
+
+if ! docker inspect "$BOOT_NODE" >/dev/null 2>&1; then
+    echo "❌ $BOOT_NODE 컨테이너가 없습니다. HTTP 통신 없이 복구할 수 없으므로 중단합니다."
+    exit 1
+fi
+
+for i in $(seq 1 "$KEEP_LAST_INDEX"); do
+    name=$(printf "${PREFIX}-%02d" "$i")
+    if ! docker inspect "$name" >/dev/null 2>&1; then
+        echo "❌ 유지해야 할 컨테이너 $name 이 없습니다. HTTP 통신 없이 복구할 수 없으므로 중단합니다."
+        exit 1
+    fi
+done
+
+echo "✅ 유지 대상 컨테이너 확인 완료"
+echo
+
+echo "========== [1] 초과 컨테이너 제거 =========="
+
+if [ "$KEEP_LAST_INDEX" -lt "$MAX_NODE_INDEX" ]; then
+    for i in $(seq $((KEEP_LAST_INDEX + 1)) "$MAX_NODE_INDEX"); do
+        name=$(printf "${PREFIX}-%02d" "$i")
+        echo "[$name] 제거 시도..."
+        docker rm -f "$name" 2>/dev/null || true
+    done
+else
+    echo "제거할 초과 컨테이너가 없습니다."
+fi
+
+echo "✅ 초과 컨테이너 제거 완료"
+echo
+
+echo "========== [2] 남은 Go 프로세스 종료 =========="
+
+NODE_LIST="$BOOT_NODE"
+for i in $(seq 1 "$KEEP_LAST_INDEX"); do
+    NODE_LIST="$NODE_LIST $(printf "${PREFIX}-%02d" "$i")"
+done
+
+for name in $NODE_LIST; do
+    echo "[$name] 기존 Go 프로세스 종료..."
+    docker exec "$name" pkill -f "go" 2>/dev/null || true
+done
+
+echo "✅ 남은 노드의 Go 프로세스 종료 완료. 2초 후 reset 시작"
+sleep 2
+echo
+
+echo "========== [3] 남은 컨테이너 reset 후 Go 프로세스 재실행 =========="
+
+restart_node_proc() {
+    local name=$1
+
+    echo "[$name] 기존 데이터 삭제 중..."
+    docker exec "$name" bash -c "rm -rf /app/blockchain_db /app/block_history.txt"
+
+    echo "[$name] Go 프로세스 재가동 중..."
+    docker exec -d -w /app "$name" bash -c "go run . > /proc/1/fd/1 2>&1"
+
+    sleep 3
+}
+
+# 부트 노드 먼저 재시작
+restart_node_proc "$BOOT_NODE"
+
+# 일반 노드 순차 재시작
+for i in $(seq 1 "$KEEP_LAST_INDEX"); do
+    name=$(printf "${PREFIX}-%02d" "$i")
+    restart_node_proc "$name"
+done
+
+echo
+echo "✅ $HOS_ID 노드 수 조정 및 reset 완료!"
+echo "현재 유지된 컨테이너 수: $TARGET_TOTAL"
+echo "로그 확인 예시: docker logs -f $BOOT_NODE"

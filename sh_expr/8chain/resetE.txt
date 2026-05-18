@@ -1,0 +1,51 @@
+resetD.txtresetD.txt#!/bin/bash
+
+# [환경 설정]
+HOS_ID="Hos-E"
+
+echo "========== [1] 기존 Go 프로세스 종료 (부트 -> 일반 순) =========="
+
+# 1. 종료할 리스트 생성 (부트노드 먼저)
+NODE_LIST="hos-E-boot"
+for i in {1..16}; do
+    NODE_LIST="$NODE_LIST $(printf "hos-E-%02d" $i)"
+done
+
+for name in $NODE_LIST; do
+    echo "[$name] 기존 프로세스 중지 및 데이터 정리..."
+    # go run 관련 프로세스 종료
+    docker exec $name pkill -f "go" || true
+done
+
+echo "✅ 모든 노드의 정리가 완료되었습니다. 2초 후 재시작합니다."
+sleep 2
+
+echo "========== [2] 데이터 초기화 및 Go 프로세스 순차 재실행 =========="
+
+# 2. 재실행 함수 (데이터 삭제 로직 추가)
+restart_node_proc() {
+    local name=$1
+
+    echo "[$name] 기존 데이터 삭제 중..."
+    # blockchain_db 폴더와 block_history.txt 파일 강제 삭제 (파일이 없어도 에러 무시)
+    docker exec $name bash -c "rm -rf /app/blockchain_db /app/block_history.txt"
+
+    echo "[$name] Go 프로세스 가동 중..."
+    # 실행
+    docker exec -d -w /app $name bash -c "go run . > /proc/1/fd/1 2>&1"
+
+    # 컴파일 및 부트노드 안정화를 위해 3초 대기
+    sleep 3
+}
+
+# (1) 부트 노드 먼저 재시작
+restart_node_proc "hos-E-boot"
+
+# (2) 일반 노드 순차 재시작
+for i in {1..16}; do
+    name=$(printf "hos-E-%02d" $i)
+    restart_node_proc "$name"
+done
+
+echo "✅ $HOS_ID 전체 노드 프로세스 재시작 및 초기화 완료!"
+echo "💡 로그 확인: docker logs -f hos-E-boot"

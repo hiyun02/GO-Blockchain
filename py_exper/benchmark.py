@@ -62,7 +62,7 @@ async def main():
     start_time = time.time()
     for i in range(1, LENGTH):
         await send_one(i)
-        await asyncio.sleep(0.001)
+        await asyncio.sleep(0.01)
     print(f"========== 실험 완료: {time.time() - start_time:.2f}초 ==========")
 
 

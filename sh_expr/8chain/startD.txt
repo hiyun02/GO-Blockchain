@@ -1,0 +1,50 @@
+#!/bin/bash
+SERVER_IP="10.128.0.26"
+HOS_ID="Hos-D"
+GOV_BOOT_ADDR="10.164.0.6:5000"
+
+echo "========== [1] 기존 $HOS_ID 노드 전체 정리 =========="
+docker rm -f $(docker ps -aq --filter name=hos-D) 2>/dev/null
+
+# 노드 가동 함수
+run_node() {
+    local name=$1
+    local port=$2
+    local b_port=$3
+    
+    echo "[$name] 생성 및 설정 시작 (Port: $port)..."
+    
+    # 1. 컨테이너 생성
+    docker run -d --name $name -p $port:5000 \
+      -e PORT=5000 \
+      -e Hos_ID=$HOS_ID \
+      -e NODE_ADDR=$SERVER_IP:$port \
+      -e BOOTSTRAP_ADDR=$SERVER_IP:$b_port \
+      -e GOV_BOOTSTRAP_ADDR=$GOV_BOOT_ADDR \
+      hiyun2002/hos-node:2.2 tail -f /dev/null
+
+    # 2. 내부 소스 설정 (git clone 및 정리)
+    docker exec $name bash -c "mkdir -p /app && cd /app && git clone https://github.com/hiyun02/GO-Blockchain.git && cp -r GO-Blockchain/PoW-BFT/hos/* . && rm -rf GO-Blockchain && rm -rf blockchain_db"
+
+    # 3. 노드 실행 (로그 리다이렉션 추가)
+    # 실행 로그를 컨테이너 표준 출력(fd/1)으로 보내 docker logs로 확인 가능하게 함
+    docker exec -d -w /app $name bash -c "go run . > /proc/1/fd/1 2>&1"
+    
+    # vCPU 2개 환경을 고려하여 컴파일 자원을 확보할 시간(3초)을 줍니다.
+    sleep 3
+}
+
+echo "========== [2] 전체  노드 순차 가동 시작 =========="
+
+# 1. 부트 노드 가동 (7000)
+run_node "hos-D-boot" 7000 7000
+
+# 2. 일반 노드 가동
+for i in {1..16}; do
+    name=$(printf "hos-D-%02d" $i)
+    port=$((7000 + i))
+    run_node "$name" $port 7000
+done
+
+echo "✅ $HOS_ID 전체 노드 가동 명령 완료!"
+echo "💡 로그 확인 예시: docker logs -f hos-D-boot"

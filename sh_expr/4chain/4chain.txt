@@ -1,0 +1,96 @@
+# 설정 파일 속 노드 수 일괄 변경
+rm -rf c*
+find . -maxdepth 1 -type f -exec sed -i 's/1\.\.7/1..11/g' {} +
+./resize.sh 12
+
+# 체인, 노드 수 변경하거나 소스코드 바뀌고 재시작할 때
+source venv/bin/activate
+docker rm -f $(docker ps -aq)
+docker system prune -f
+./start.sh
+docker logs -f gov-boot
+
+
+# 노드 수 유지하고 , 초기화하고 싶을 때
+./reset.sh
+docker logs -f gov-boot
+
+source venv/bin/activate
+./reset.sh
+python3 benchmark.py 10001
+
+docker rm -f $(docker ps -aq)
+docker system prune -f
+./start.sh
+docker logs -f gov-boot
+
+./rerun.sh
+docker logs -f gov-boot
+
+docker rm -f $(docker ps -aq)
+docker system prune -f
+./start.sh
+docker logs -f hos-A-01
+
+docker rm -f $(docker ps -aq)
+docker system prune -f
+./start.sh
+ docker logs -f hos-B-01
+
+docker rm -f $(docker ps -aq)
+docker system prune -f
+./start.sh
+ docker logs -f hos-C-01
+
+docker rm -f $(docker ps -aq)
+docker system prune -f
+./start.sh
+ docker logs -f hos-D-01
+
+source venv/bin/activate
+./rerun.sh
+python3 benchmark.py 10001
+source venv/bin/activate
+./rerun.sh
+python3 benchmark.py 5001
+source venv/bin/activate
+./rerun.sh
+python3 benchmark.py 3001
+source venv/bin/activate
+./rerun.sh
+python3 benchmark.py 1001
+source venv/bin/activate
+./rerun.sh
+python3 benchmark.py 501
+source venv/bin/activate
+./rerun.sh
+python3 benchmark.py 101
+
+
+sudo docker cp hos-A-boot:/app/block_history.txt ./create-12-hosA.txt
+/home/icn0690/create-12-hosA.txt
+
+sudo docker cp hos-B-boot:/app/block_history.txt ./create-12-hosB.txt
+/home/icn0690/create-12-hosB.txt
+
+sudo docker cp hos-C-boot:/app/block_history.txt ./create-12-hosC.txt
+/home/icn0690/create-12-hosC.txt
+
+sudo docker cp hos-D-boot:/app/block_history.txt ./create-12-hosD.txt
+/home/icn0690/create-12-hosD.txt
+
+sudo docker cp gov-boot:/app/block_history.txt ./create-12-govA.txt
+/home/icn0690/create-12-govA.txt
+
+
+vi start.sh
+vi rerun.sh
+vi reset.sh
+
+source venv/bin/activate
+python3 query.py 10001
+
+/home/icn0690/query-10000-Hos-A.txt
+/home/icn0690/query-10000-Hos-B.txt
+/home/icn0690/query-10000-Hos-C.txt
+/home/icn0690/query-10000-Hos-D.txt

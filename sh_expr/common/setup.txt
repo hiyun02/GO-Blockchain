@@ -1,0 +1,21 @@
+작업 디렉터리 변경
+rm -rf c*
+sudo rm -rf ../icn_user/
+python3 -m venv venv
+source venv/bin/activate
+pip install aiohttp
+ls
+
+설정 파일 변경
+vi rerun.sh
+vi reset.sh
+vi resize.sh
+vi start.sh
+vi benchmark.py
+
+설정파일 실행 권한
+chmod 777 reset.sh
+chmod 777 resize.sh
+chmod 777 rerun.sh
+chmod 777 start.sh
+ls

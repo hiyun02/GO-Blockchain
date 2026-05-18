@@ -1,0 +1,43 @@
+#!/bin/bash
+
+# [환경 설정]
+GOV_ID="Gov-A"
+NODE_LIST="gov-boot gov-node-01"
+
+echo "========== [1] 기존 Go 프로세스 종료 (Gov 노드) =========="
+
+for name in $NODE_LIST; do
+    echo "[$name] 기존 프로세스 중지 및 데이터 정리..."
+    # go 프로세스 종료 (실패해도 계속 진행)
+    docker exec $name pkill -f "go" || true
+done
+
+echo "✅ 프로세스 정리 완료. 2초 후 데이터 삭제 및 재시작합니다."
+sleep 2
+
+echo "========== [2] 데이터 초기화 및 Go 프로세스 순차 재실행 =========="
+
+# 재실행 함수 (데이터 삭제 로직 포함)
+restart_gov_proc() {
+    local name=$1
+
+    echo "[$name] DB 및 히스토리 파일 삭제 중..."
+    # blockchain_db 폴더와 block_history.txt 파일 강제 삭제
+    docker exec $name bash -c "rm -rf /app/blockchain_db /app/block_history.txt"
+
+    echo "[$name] Go 프로세스 재가동..."
+    # 컨테이너의 /app 디렉토리에서 바로 실행
+    docker exec -d -w /app $name bash -c "go run . > /proc/1/fd/1 2>&1"
+
+    # 부트노드 안정화 및 순차 실행을 위한 대기
+    sleep 3
+}
+
+# (1) 부트 노드 먼저 재시작
+restart_gov_proc "gov-boot"
+
+# (2) 일반 노드 순차 재시작
+restart_gov_proc "gov-node-01"
+
+echo "✅ $GOV_ID 전체 노드 프로세스 초기화 및 재시작 완료!"
+echo "💡 로그 확인: docker logs -f gov-boot"

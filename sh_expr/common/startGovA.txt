@@ -1,0 +1,36 @@
+#!/bin/bash
+SERVER_IP="10.164.0.6"
+GOV_ID="Gov-A"
+
+echo "========== [1] 기존 $GOV_ID 노드 정리 =========="
+docker rm -f gov-boot gov-node-01 2>/dev/null
+
+echo "========== [2] 컨테이너 생성 =========="
+# 부트 노드
+docker run -d --name gov-boot -p 5000:5000 \
+  -e PORT=5000 -e Gov_ID=$GOV_ID -e NODE_ADDR=$SERVER_IP:5000 -e BOOTSTRAP_ADDR=$SERVER_IP:5000 \
+  hiyun2002/gov-node:2.2 tail -f /dev/null
+
+# 일반 노드 01
+docker run -d --name gov-node-01 -p 5001:5000 \
+  -e PORT=5000 -e Gov_ID=$GOV_ID -e NODE_ADDR=$SERVER_IP:5001 -e BOOTSTRAP_ADDR=$SERVER_IP:5000 \
+  hiyun2002/gov-node:2.2 tail -f /dev/null
+
+echo "========== [3] 소스 설정 및 실행 (Gov용 경로) =========="
+INIT_CMD="mkdir -p /app && cd /app && \
+          git clone https://github.com/hiyun02/GO-Blockchain.git && \
+          cp -r GO-Blockchain/PoW-BFT/gov/* . && \
+          rm -rf GO-Blockchain && \
+          rm -rf blockchain_db && \
+          rm -f block_history.txt"
+
+for name in "gov-boot" "gov-node-01"; do
+    echo "[$name] 설정 및 실행 중..."
+    docker exec $name bash -c "$INIT_CMD"
+    # [수정 포인트] 실행 로그를 컨테이너 표준 출력(fd/1)으로 보냅니다.
+    # 이렇게 하면 docker logs -f 명령어로 실시간 확인이 가능합니다.
+    docker exec -d -w /app $name bash -c "go run . > /proc/1/fd/1 2>&1"
+done
+
+echo "✅ Gov-A 체인 가동 완료!"
+echo "💡 로그 확인: docker logs -f gov-boot"

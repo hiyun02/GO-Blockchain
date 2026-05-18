@@ -20,7 +20,6 @@ if len(sys.argv) > 1:
 else:
     MAX_KEYWORD = 1001
 
-
 async def run_query(i, hos_id, log_file):
     # hos_id에 맞춰 키워드 접두사를 결정하고 초(s) 단위로 레이턴시 측정
     rand_num = random.randint(1, MAX_KEYWORD)
@@ -55,11 +54,11 @@ async def run_query(i, hos_id, log_file):
 
 
 async def main():
-    hospitals = ["Hos-A", "Hos-B"]
+    hospitals = ["Hos-A", "Hos-B", "Hos-C", "Hos-D"]
 
     for hos_id in hospitals:
         # 파일명에 병원 이름을 포함시켜야 데이터가 덮어씌워지지 않습니다.
-        current_log = f"query-16-{MAX_KEYWORD - 1}-{hos_id}.txt"
+        current_log = f"query-{MAX_KEYWORD - 1}-{hos_id}.txt"
 
         with open(current_log, "w", encoding="utf-8") as f:
             f.write(f"--- Test for {hos_id} ---\n")

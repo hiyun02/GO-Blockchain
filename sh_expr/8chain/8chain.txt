@@ -1,0 +1,124 @@
+# 설정 파일 속 노드 수 일괄 변경
+rm -rf c*
+find . -maxdepth 1 -type f -exec sed -i 's/1\.\.11/1..16/g' {} +
+./resize.sh 8
+
+# 체인, 노드 수 변경하거나 소스코드 바뀌고 재시작할 때
+source venv/bin/activate
+docker rm -f $(docker ps -aq)
+docker system prune -f
+./start.sh
+
+# 노드 수 유지하고 , 초기화하고싶을 때
+source venv/bin/activate
+./reset.sh
+python3 benchmark.py 10001
+
+cd ../icn0690
+docker rm -f $(docker ps -aq)
+docker system prune -f
+./start.sh
+docker logs -f gov-boot
+
+docker rm -f $(docker ps -aq)
+docker system prune -f
+./start.sh
+docker logs -f hos-A-01
+
+docker rm -f $(docker ps -aq)
+docker system prune -f
+./start.sh
+ docker logs -f hos-B-01
+
+docker rm -f $(docker ps -aq)
+docker system prune -f
+./start.sh
+ docker logs -f hos-C-01
+
+docker rm -f $(docker ps -aq)
+docker system prune -f
+./start.sh
+ docker logs -f hos-D-01
+
+docker rm -f $(docker ps -aq)
+docker system prune -f
+./start.sh
+ docker logs -f hos-E-01
+
+docker rm -f $(docker ps -aq)
+docker system prune -f
+./start.sh
+ docker logs -f hos-F-01
+
+docker rm -f $(docker ps -aq)
+docker system prune -f
+./start.sh
+ docker logs -f hos-G-01
+
+docker rm -f $(docker ps -aq)
+docker system prune -f
+./start.sh
+ docker logs -f hos-H-01
+
+
+source venv/bin/activate
+./rerun.sh
+python3 benchmark.py 10001
+source venv/bin/activate
+./rerun.sh
+python3 benchmark.py 5001
+source venv/bin/activate
+./rerun.sh
+python3 benchmark.py 3001
+source venv/bin/activate
+./rerun.sh
+python3 benchmark.py 1001
+source venv/bin/activate
+./rerun.sh
+python3 benchmark.py 501
+source venv/bin/activate
+./rerun.sh
+python3 benchmark.py 101
+
+source venv/bin/activate
+python3 query.py 10001
+
+sudo docker cp hos-A-boot:/app/block_history.txt ./create-8-hosA.txt
+/home/icn0690/create-8-hosA.txt
+
+sudo docker cp hos-B-boot:/app/block_history.txt ./create-8-hosB.txt
+/home/icn0690/create-8-hosB.txt
+
+sudo docker cp hos-C-boot:/app/block_history.txt ./create-8-hosC.txt
+/home/icn0690/create-8-hosC.txt
+
+sudo docker cp hos-D-boot:/app/block_history.txt ./create-8-hosD.txt
+/home/icn0690/create-8-hosD.txt
+
+sudo docker cp hos-E-boot:/app/block_history.txt ./create-8-hosE.txt
+/home/icn0690/create-8-hosE.txt
+
+sudo docker cp hos-F-boot:/app/block_history.txt ./create-8-hosF.txt
+/home/icn0690/create-8-hosF.txt
+
+sudo docker cp hos-G-boot:/app/block_history.txt ./create-8-hosG.txt
+/home/icn0690/create-8-hosG.txt
+
+sudo docker cp hos-H-boot:/app/block_history.txt ./create-8-hosH.txt
+/home/icn0690/create-8-hosH.txt
+
+sudo docker cp gov-boot:/app/block_history.txt ./create-8-govA.txt
+/home/icn0690/create-8-govA.txt
+
+/home/icn0690/query-10000-Hos-A.txt
+/home/icn0690/query-10000-Hos-B.txt
+/home/icn0690/query-10000-Hos-C.txt
+/home/icn0690/query-10000-Hos-D.txt
+/home/icn0690/query-10000-Hos-E.txt
+/home/icn0690/query-10000-Hos-F.txt
+/home/icn0690/query-10000-Hos-G.txt
+/home/icn0690/query-10000-Hos-H.txt
+
+vi start.sh
+vi rerun.sh
+vi reset.sh

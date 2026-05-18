@@ -1,0 +1,47 @@
+#!/bin/bash
+
+# [환경 설정] 가동 스크립트와 동일한 변수 사용
+HOS_ID="Hos-D"
+
+echo "========== [1] 기존 Go 프로세스 종료 (부트 -> 일반 순) =========="
+
+# 1. 종료할 리스트 생성 (부트노드 먼저)
+NODE_LIST="hos-D-boot"
+for i in {1..16}; do
+    NODE_LIST="$NODE_LIST $(printf "hos-D-%02d" $i)"
+done
+
+for name in $NODE_LIST; do
+    echo "[$name] 기존 프로세스 중지 및 데이터 정리..."
+    # go run 관련 프로세스 종료
+    docker exec $name pkill -f "go" || true
+done
+
+echo "✅ 모든 노드의 정리가 완료되었습니다. 2초 후 재시작합니다."
+sleep 2
+
+echo "========== [2] Go 프로세스 순차 재실행 (부트노드 우선) =========="
+
+# 2. 재실행 함수 (가동 스크립트의 실행 로직 응용)
+restart_node_proc() {
+    local name=$1
+    echo "[$name] Go 프로세스 가동 중..."
+
+    # 주신 로직 그대로 /app 경로에서 실행 및 로그 리다이렉션
+    docker exec -d -w /app $name bash -c "go run . > /proc/1/fd/1 2>&1"
+
+    # 컴파일 및 부트노드 안정화를 위해 3초 대기 (주신 스크립트 설정값)
+    sleep 3
+}
+
+# (1) 부트 노드 먼저 재시작
+restart_node_proc "hos-D-boot"
+
+# (2) 일반 노드 순차 재시작
+for i in {1..16}; do
+    name=$(printf "hos-D-%02d" $i)
+    restart_node_proc "$name"
+done
+
+echo "✅ $HOS_ID 전체  노드 프로세스 재시작 완료!"
+echo "💡 로그 확인: docker logs -f hos-D-boot"
