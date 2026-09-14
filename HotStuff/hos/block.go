@@ -1,0 +1,124 @@
+package main
+
+import (
+	"encoding/json"
+	"log"
+	"strings"
+	"time"
+)
+
+// //////////////////////////////////////////////////////////////////////////////
+// LowerBlock (Hos 체인 블록 구조)
+// ------------------------------------------------------------
+// Hos(Clinic Provider) 체인에서 생성되는 블록 단위 구조체
+// 하나의 블록은 여러 ClinicRecord(Entries)를 포함하고,
+// 그 해시들을 기반으로 Merkle Root를 계산하여 블록 헤더에 저장
+// //////////////////////////////////////////////////////////////////////////////
+type LowerBlock struct {
+	Index      int            `json:"index"`              // 블록 번호
+	HosID      string         `json:"hos_id"`             // Hos 체인 식별자
+	PrevHash   string         `json:"prev_hash"`          // 이전 블록의 해시
+	Timestamp  string         `json:"timestamp"`          // 생성 시간 (RFC3339Nano 권장)
+	Entries    []ClinicRecord `json:"entries"`            // 블록 내 진료 정보 목록
+	MerkleRoot string         `json:"merkle_root"`        // Entries의 해시 기반 머클루트
+	Proposer   string         `json:"proposer"`           // 해당 블록의 합의 집행자
+	Signatures []string       `json:"signatures"`         // 2f+1개 이상의 노드 서명 목록 (합의 증거)
+	HotStuff   *HotStuffProof `json:"hotstuff,omitempty"` // HotStuff 3단계 QC 합의 증거
+	BlockHash  string         `json:"block_hash"`         // 블록 전체 해시 (헤더 기준)
+	Elapsed    float32        `json:"elapsed"`            // 소요 시간
+	LeafHashes []string       `json:"leaf_hashes"`        // Merkle Proof 재현을 위한 해시값 모음
+}
+
+// 제네시스 블록 생성
+func createGenesisBlock(hosID string) LowerBlock {
+	log.Printf("[블록] 제네시스 블록 생성을 시작합니다.")
+	genesis := LowerBlock{
+		Index:      0,
+		HosID:      hosID,
+		PrevHash:   strings.Repeat("0", 64),
+		Timestamp:  "2026-01-21 T01:07:18Z",
+		Entries:    []ClinicRecord{},
+		MerkleRoot: "",
+		Proposer:   "SYSTEM",   // 제네시스는 시스템에 의해 생성됨
+		Signatures: []string{}, // 제네시스는 투표 절차 생략
+		Elapsed:    0,
+		LeafHashes: []string{},
+	}
+	genesis.BlockHash = genesis.computeHash()
+	log.Printf("[블록] 제네시스 블록을 생성했습니다. (해시=%s)", shortHash(genesis.BlockHash))
+	return genesis
+}
+
+// 블록의 식별자인 Hash 값 계산
+func (b LowerBlock) computeHash() string {
+	hdr := struct {
+		Index      int    `json:"index"`
+		HosID      string `json:"hos_id"`
+		PrevHash   string `json:"prev_hash"`
+		Timestamp  string `json:"timestamp"`
+		MerkleRoot string `json:"merkle_root"`
+		Proposer   string `json:"proposer"`
+	}{
+		Index:      b.Index,
+		HosID:      b.HosID,
+		PrevHash:   b.PrevHash,
+		Timestamp:  b.Timestamp,
+		MerkleRoot: b.MerkleRoot,
+		Proposer:   b.Proposer,
+	}
+	return sha256Hex(jsonCanonical(hdr))
+}
+
+func createProposedBlock(entries []ClinicRecord) LowerBlock {
+
+	height, _ := getLatestHeight()
+	prevBlock, _ := getBlockByIndex(height)
+
+	newBlock := LowerBlock{
+		Index:      height + 1,
+		HosID:      selfID(),
+		PrevHash:   prevBlock.BlockHash,
+		Timestamp:  time.Now().UTC().Format(time.RFC3339Nano),
+		Entries:    entries,
+		Proposer:   self,
+		Signatures: []string{},
+		Elapsed:    0,
+	}
+
+	// Leaf Hash 생성
+	leafHashes := make([]string, len(entries))
+	for i, r := range entries {
+		leafHashes[i] = hashClinicRecord(r)
+	}
+
+	newBlock.LeafHashes = leafHashes
+
+	// Merkle Root 계산
+	if len(leafHashes) > 0 {
+		newBlock.MerkleRoot = merkleRootHex(leafHashes)
+	}
+
+	// Block Hash 계산
+	newBlock.BlockHash = newBlock.computeHash()
+
+	return newBlock
+}
+func (b LowerBlock) GetSizeMetrics() (totalMB float64, payloadRatio float64) {
+	// 1. 블록 전체를 직렬화하여 크기 측정 (Bytes)
+	fullBytes, _ := json.Marshal(b)
+	totalBytes := float64(len(fullBytes))
+
+	// 2. 헤더 부분만 따로 측정하기 위해 복사본 생성 (Entries, LeafHashes 제외)
+	headerOnly := b
+	headerOnly.Entries = nil
+	headerOnly.LeafHashes = nil
+	headerBytes, _ := json.Marshal(headerOnly)
+	headerSize := float64(len(headerBytes))
+
+	if totalBytes > 0 {
+		totalMB = totalBytes / (1024 * 1024)           // 전체 용량 (MB)
+		headerRatio := (headerSize / totalBytes) * 100 // 헤더 비중 (%)
+		payloadRatio = 100 - headerRatio               // 페이로드 비중 (%)
+	}
+	return totalMB, payloadRatio
+}

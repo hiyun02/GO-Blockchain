@@ -1,0 +1,362 @@
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"log"
+	"os"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/syndtr/goleveldb/leveldb"
+)
+
+////////////////////////////////////////////////////////////////////////////////
+// LevelDB Storage (Hos 하부체인용)
+// ----------------------------------------------------------------------------
+// - 블록 저장: 번호/해시 두 축으로 JSON 저장
+// - 콘텐츠 색인: cid/pc/info 기반 -> "<blockIndex>:<entryIndex>" 포인터 저장
+//   (이전처럼 block_hash만 저장하면 재시작 후 entry 위치를 다시 스캔해야 해서 비효율)
+// - 추가 메타: 최신 루트 캐시 등은 선택
+////////////////////////////////////////////////////////////////////////////////
+
+// 전역 DB 핸들 (단일 프로세스 내에서 공유)
+var db *leveldb.DB
+var blockHistoryPath = getEnvDefault("BLOCK_HISTORY_PATH", "block_history.txt")
+
+// ---- 내부 메타키 헬퍼 ---------------------------------------------------------
+func putMeta(key, val string) error {
+	return db.Put([]byte(key), []byte(val), nil)
+}
+func getMeta(key string) (string, bool) {
+	v, err := db.Get([]byte(key), nil)
+	if err != nil {
+		return "", false
+	}
+	return string(v), true
+}
+
+func getLatestHeight() (int, bool) {
+	if s, ok := getMeta("height_latest"); ok {
+		h, err := strconv.Atoi(s)
+		if err == nil {
+			return h, true
+		}
+	}
+	return 0, false
+}
+func setLatestHeight(h int) error {
+	return putMeta("height_latest", strconv.Itoa(h))
+}
+
+// LevelDB 열기
+func initDB(path string) {
+	var err error
+	db, err = leveldb.OpenFile(path, nil)
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Println("[DB] LevelDB를 초기화했습니다:", path)
+}
+
+// LevelDB 닫기
+func closeDB() {
+	if db != nil {
+		db.Close()
+		log.Println("[DB] LevelDB 연결을 종료했습니다.")
+	}
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// 블록 저장/조회
+////////////////////////////////////////////////////////////////////////////////
+
+// LowerBlock 전체를 JSON으로 저장
+// - Key1: "block_<Index>"     => LowerBlock JSON (번호 기반 접근)
+// - Key2: "hash_<BlockHash>"  => LowerBlock JSON (해시 기반 접근)
+// 주: 키 형식은 기존 코드와의 호환을 위해 유지
+func saveBlockToDB(block LowerBlock) error {
+	data, err := json.Marshal(block)
+	if err != nil {
+		return err
+	}
+
+	// 블록 번호 기반 저장
+	keyByIndex := fmt.Sprintf("block_%d", block.Index)
+	if err := db.Put([]byte(keyByIndex), data, nil); err != nil {
+		return err
+	}
+
+	// 블록 해시 기반 저장
+	keyByHash := fmt.Sprintf("hash_%s", block.BlockHash)
+	if err := db.Put([]byte(keyByHash), data, nil); err != nil {
+		return err
+	}
+
+	// 최신 루트 캐시(선택)
+	if err := db.Put([]byte("root_latest"), []byte(block.MerkleRoot), nil); err != nil {
+		return err
+	}
+	log.Printf("[DB] 블록 #%d을(를) 저장했습니다. (해시=%s)\n", block.Index, block.BlockHash)
+	appendBlockLog(block)
+	return nil
+}
+
+// 인덱스로 블록 조회
+func getBlockByIndex(index int) (LowerBlock, error) {
+	key := fmt.Sprintf("block_%d", index)
+	data, err := db.Get([]byte(key), nil)
+	if err != nil {
+		return LowerBlock{}, err
+	}
+	var block LowerBlock
+	if err := json.Unmarshal(data, &block); err != nil {
+		return LowerBlock{}, err
+	}
+	return block, nil
+}
+
+// 블록 해시로 조회
+func getBlockByHash(hash string) (LowerBlock, error) {
+	key := fmt.Sprintf("hash_%s", hash)
+	data, err := db.Get([]byte(key), nil)
+	if err != nil {
+		return LowerBlock{}, err
+	}
+	var block LowerBlock
+	if err := json.Unmarshal(data, &block); err != nil {
+		return LowerBlock{}, err
+	}
+	return block, nil
+}
+
+// 최신 루트 캐시 조회(없으면 빈 문자열)
+func getLatestRoot() string {
+	if v, err := db.Get([]byte("root_latest"), nil); err == nil {
+		return string(v)
+	}
+	return ""
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// 해시테이블(검색 인덱스) 업데이트
+//  - 블록 단위로 cid/pc/info 색인을 "<blockIndex>:<entryIndex>" 포인터로 저장
+////////////////////////////////////////////////////////////////////////////////
+
+func updateIndicesForBlock(block LowerBlock) error {
+	// 포인터 문자열: "blockIndex:entryIndex"
+	ptr := func(bi, ei int) []byte { return []byte(fmt.Sprintf("%d:%d", bi, ei)) }
+
+	for ei, entry := range block.Entries {
+		// 1) ClinicID 색인: "cid_<ClinicID>" -> "bi:ei"
+		if entry.ClinicID != "" {
+			keyByCID := fmt.Sprintf("cid_%s", entry.ClinicID)
+			if err := db.Put([]byte(keyByCID), ptr(block.Index, ei), nil); err != nil {
+				return err
+			}
+		}
+
+		// 2) PrescCode 색인: "pc_<PrescCode>" -> "bi:ei"
+		if entry.PrescCode != "" {
+			keyByPC := fmt.Sprintf("pc_%s", entry.PrescCode)
+			if err := db.Put([]byte(keyByPC), ptr(block.Index, ei), nil); err != nil {
+				return err
+			}
+		}
+
+		// 3) Info 키워드 색인(간단 버전)
+		//    - 점 표기(dotted key)나 부분일치는 API 레이어에서 확장 가능
+		//    - 여기서는 cCode 같은 문자열을 소문자로 normalize해서 저장
+		for k, v := range entry.Info {
+			strVal := strings.TrimSpace(fmt.Sprintf("%v", v))
+			if strVal == "" {
+				continue
+			}
+			key := fmt.Sprintf("info_%s_%s", k, strings.ToLower(strVal))
+			if err := db.Put([]byte(key), ptr(block.Index, ei), nil); err != nil {
+				return err
+			}
+		}
+	}
+
+	log.Printf("[DB] 블록 #%d의 검색 인덱스를 갱신했습니다. (레코드=%d건)\n",
+		block.Index, len(block.Entries))
+	return nil
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// 검색 유틸
+////////////////////////////////////////////////////////////////////////////////
+
+// parsePtr : "bi:ei" => (bi, ei, ok)
+func parsePtr(s string) (int, int, bool) {
+	parts := strings.Split(s, ":")
+	if len(parts) != 2 {
+		return 0, 0, false
+	}
+	bi, err1 := strconv.Atoi(parts[0])
+	ei, err2 := strconv.Atoi(parts[1])
+	return bi, ei, err1 == nil && err2 == nil
+}
+
+// 키워드로 블록 조회(단순 버전)
+//   - keyword가 ClinicID, PrescCode, 또는 Info에 매칭되면
+//     해당 포인터("bi:ei")를 통해 블록을 찾아 반환
+//   - 여러 매칭이 가능할 수 있으나, 여기서는 최초 매칭 1개만 반환(간단화)
+func getBlockByClinic(keyword string) (LowerBlock, error) {
+	// ClinicID 색인 조회
+	if v, err := db.Get([]byte("cid_"+keyword), nil); err == nil {
+		if bi, _, ok := parsePtr(string(v)); ok {
+			return getBlockByIndex(bi)
+		}
+	}
+
+	// PrescCode 색인 조회
+	if v, err := db.Get([]byte("pc_"+keyword), nil); err == nil {
+		if bi, _, ok := parsePtr(string(v)); ok {
+			return getBlockByIndex(bi)
+		}
+	}
+
+	// Info(title 등) 색인 조회 (소문자 normalize)
+	if v, err := db.Get([]byte("info_cCode_"+strings.ToLower(keyword)), nil); err == nil {
+		if bi, _, ok := parsePtr(string(v)); ok {
+			return getBlockByIndex(bi)
+		}
+	}
+
+	return LowerBlock{}, fmt.Errorf("no block found for keyword: %s", keyword)
+}
+
+// ==========================
+// 전체 장부(블록) 조회 유틸
+// ==========================
+
+// 전체 블록 조회
+func listAllBlocks() ([]LowerBlock, error) {
+	h, ok := getLatestHeight()
+	if !ok {
+		// 제네시스만 있을 수도 있으니 0만 확인
+		b0, err := getBlockByIndex(0)
+		if err != nil {
+			return nil, fmt.Errorf("no chain: %w", err)
+		}
+		return []LowerBlock{b0}, nil
+	}
+	out := make([]LowerBlock, 0, h+1)
+	for i := 0; i <= h; i++ {
+		b, err := getBlockByIndex(i)
+		if err != nil {
+			return nil, fmt.Errorf("load block_%d: %w", i, err)
+		}
+		out = append(out, b)
+	}
+	return out, nil
+}
+
+// offset에서 최대 limit개 반환, total(=height+1)도 함께 반환
+func listBlocksPaginated(offset, limit int) ([]LowerBlock, int, error) {
+	if offset < 0 || limit <= 0 {
+		return nil, 0, fmt.Errorf("invalid offset/limit")
+	}
+	h, ok := getLatestHeight()
+	if !ok {
+		// 제네시스만 있는지 확인
+		if _, err := getBlockByIndex(0); err != nil {
+			return nil, 0, fmt.Errorf("no chain: %w", err)
+		}
+		h = 0
+	}
+	total := h + 1
+	if offset >= total {
+		return []LowerBlock{}, total, nil
+	}
+	end := offset + limit - 1
+	if end > h {
+		end = h
+	}
+	out := make([]LowerBlock, 0, end-offset+1)
+	for i := offset; i <= end; i++ {
+		b, err := getBlockByIndex(i)
+		if err != nil {
+			return nil, total, fmt.Errorf("load block_%d: %w", i, err)
+		}
+		out = append(out, b)
+	}
+	return out, total, nil
+}
+
+// 현재 노드의 Hos 식별자 반환 (메타데이터에서 읽기)
+func selfID() string {
+	if v, ok := getMeta("meta_hos_id"); ok {
+		return v
+	}
+	return "UNKNOWN_Hos"
+}
+
+func appendBlockLog(block LowerBlock) {
+	f, err := os.OpenFile(blockHistoryPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		log.Printf("[로그][오류] 블록 이력 파일 열기 실패: %v", err)
+		return
+	}
+	defer f.Close()
+
+	// 1 & 2번 지표: block.go에서 만든 함수 호출
+	totalMB, payloadRatio := block.GetSizeMetrics()
+
+	// 3번 지표: Latency 계산 (제안 시점 Timestamp vs 현재 로깅 시점)
+	startTime, err := time.Parse(time.RFC3339Nano, block.Timestamp)
+	var latency float64 = 0
+	if err == nil {
+		latency = time.Since(startTime).Seconds()
+	}
+	// Index: 블록번호
+	// Entries: 데이터 건수
+	// Size: 블록 전체 용량 (MB)
+	// Payload: 순수 데이터 비중 (%) -> 100 - 헤더비율
+	// Latency: 합의 및 저장 소요시간 (초)
+	line := fmt.Sprintf("Idx:%d, Entries:%d, Size:%.6fMB, Payload:%.2f%%, EndStamp: %s, Latency:%.4fs\n",
+		block.Index,
+		len(block.Entries),
+		totalMB,
+		payloadRatio,
+		time.Now().UTC().Format("15:04:05.000"),
+		latency,
+	)
+
+	if _, err := f.WriteString(line); err != nil {
+		log.Printf("[로그][오류] 블록 이력 쓰기 실패: %v", err)
+	}
+}
+
+// 로컬 체인을 완전히 초기화하고 제네시스 블록만 재생성
+func resetLocalDB() error {
+	chainMu.Lock()
+	defer chainMu.Unlock()
+
+	log.Printf("[체인] 로컬 체인 초기화를 시작합니다.")
+
+	// LevelDB 전체 삭제
+	iter := db.NewIterator(nil, nil)
+	for iter.Next() {
+		key := iter.Key()
+		if err := db.Delete(key, nil); err != nil {
+			iter.Release()
+			return fmt.Errorf("failed to delete key %s: %v", string(key), err)
+		}
+	}
+	iter.Release()
+	if err := iter.Error(); err != nil {
+		return fmt.Errorf("iterator error during db clear: %v", err)
+	}
+
+	// 로컬 height 초기화
+	if err := setLatestHeight(-1); err != nil {
+		return fmt.Errorf("failed to reset height: %v", err)
+	}
+
+	log.Printf("[체인] 로컬 체인 초기화를 완료했습니다.")
+	return nil
+}

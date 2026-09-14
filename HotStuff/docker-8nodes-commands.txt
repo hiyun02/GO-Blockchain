@@ -1,0 +1,215 @@
+# HotStuff 8노드 Docker 수동 실행 명령어
+# PowerShell에서 아래 명령을 위에서부터 한 줄씩 실행하세요.
+# 주석(#으로 시작하는 줄)은 실행하지 않아도 됩니다.
+
+# 0. 프로젝트 폴더로 이동
+Set-Location 'C:\Workspace\GO-Blockchain'
+
+# 기존 1 Gov + 2 Hos Compose 컨테이너 중지
+docker compose -f .\HotStuff\compose.yaml down
+
+# 기존 8노드 컨테이너가 없는지 확인
+docker ps -a --filter "name=hs8-"
+
+# 같은 이름의 이전 테스트 컨테이너가 있을 때만 아래 8줄 실행
+docker rm -f hs8-gov-0
+docker rm -f hs8-gov-1
+docker rm -f hs8-gov-2
+docker rm -f hs8-gov-3
+docker rm -f hs8-hos-0
+docker rm -f hs8-hos-1
+docker rm -f hs8-hos-2
+docker rm -f hs8-hos-3
+
+# 전용 Docker 네트워크 확인
+docker network inspect hotstuff8
+
+# 위 명령에서 네트워크가 없다는 오류가 나올 때만 실행
+docker network create hotstuff8
+
+# Docker Hub 이미지 받기
+docker pull hiyun2002/gov-node:hotstuff
+docker pull hiyun2002/hos-node:hotstuff
+
+# ============================================================
+# 1. Gov 부트노드 실행: 호스트 포트 5000
+# ============================================================
+docker run -d --name hs8-gov-0 --network hotstuff8 --label hs.stack=hotstuff8 --restart unless-stopped -p 5000:5000 -v hs8-gov-0-data:/data -e Gov_ID=Gov-A -e PORT=5000 -e NODE_ADDR=hs8-gov-0:5000 -e BOOTSTRAP_ADDR=hs8-gov-0:5000 -e Gov_DB_PATH=/data/blockchain_db -e BLOCK_HISTORY_PATH=/data/block_history.txt -e HOTSTUFF_BATCH_SIZE=1 -e HOTSTUFF_BATCH_TIMEOUT_SEC=2 -e HOTSTUFF_VIEW_TIMEOUT_SEC=8 --health-cmd "wget -qO- http://127.0.0.1:5000/status || exit 1" --health-interval 2s --health-timeout 2s --health-retries 30 hiyun2002/gov-node:hotstuff
+docker inspect -f '{{.State.Health.Status}}' hs8-gov-0
+docker logs --tail 100 hs8-gov-0
+
+# hs8-gov-0이 healthy가 된 다음 진행
+
+# ============================================================
+# 2. Gov 노드 1 실행: 호스트 포트 5001
+# ============================================================
+docker run -d --name hs8-gov-1 --network hotstuff8 --label hs.stack=hotstuff8 --restart unless-stopped -p 5001:5000 -v hs8-gov-1-data:/data -e Gov_ID=Gov-A -e PORT=5000 -e NODE_ADDR=hs8-gov-1:5000 -e BOOTSTRAP_ADDR=hs8-gov-0:5000 -e Gov_DB_PATH=/data/blockchain_db -e BLOCK_HISTORY_PATH=/data/block_history.txt -e HOTSTUFF_BATCH_SIZE=1 -e HOTSTUFF_BATCH_TIMEOUT_SEC=2 -e HOTSTUFF_VIEW_TIMEOUT_SEC=8 --health-cmd "wget -qO- http://127.0.0.1:5000/status || exit 1" --health-interval 2s --health-timeout 2s --health-retries 30 hiyun2002/gov-node:hotstuff
+docker inspect -f '{{.State.Health.Status}}' hs8-gov-1
+docker logs --tail 100 hs8-gov-1
+
+# hs8-gov-1이 healthy가 된 다음 진행
+
+# ============================================================
+# 3. Gov 노드 2 실행: 호스트 포트 5002
+# ============================================================
+docker run -d --name hs8-gov-2 --network hotstuff8 --label hs.stack=hotstuff8 --restart unless-stopped -p 5002:5000 -v hs8-gov-2-data:/data -e Gov_ID=Gov-A -e PORT=5000 -e NODE_ADDR=hs8-gov-2:5000 -e BOOTSTRAP_ADDR=hs8-gov-0:5000 -e Gov_DB_PATH=/data/blockchain_db -e BLOCK_HISTORY_PATH=/data/block_history.txt -e HOTSTUFF_BATCH_SIZE=1 -e HOTSTUFF_BATCH_TIMEOUT_SEC=2 -e HOTSTUFF_VIEW_TIMEOUT_SEC=8 --health-cmd "wget -qO- http://127.0.0.1:5000/status || exit 1" --health-interval 2s --health-timeout 2s --health-retries 30 hiyun2002/gov-node:hotstuff
+docker inspect -f '{{.State.Health.Status}}' hs8-gov-2
+docker logs --tail 100 hs8-gov-2
+
+# hs8-gov-2가 healthy가 된 다음 진행
+
+# ============================================================
+# 4. Gov 노드 3 실행: 호스트 포트 5003
+# ============================================================
+docker run -d --name hs8-gov-3 --network hotstuff8 --label hs.stack=hotstuff8 --restart unless-stopped -p 5003:5000 -v hs8-gov-3-data:/data -e Gov_ID=Gov-A -e PORT=5000 -e NODE_ADDR=hs8-gov-3:5000 -e BOOTSTRAP_ADDR=hs8-gov-0:5000 -e Gov_DB_PATH=/data/blockchain_db -e BLOCK_HISTORY_PATH=/data/block_history.txt -e HOTSTUFF_BATCH_SIZE=1 -e HOTSTUFF_BATCH_TIMEOUT_SEC=2 -e HOTSTUFF_VIEW_TIMEOUT_SEC=8 --health-cmd "wget -qO- http://127.0.0.1:5000/status || exit 1" --health-interval 2s --health-timeout 2s --health-retries 30 hiyun2002/gov-node:hotstuff
+docker inspect -f '{{.State.Health.Status}}' hs8-gov-3
+docker logs --tail 100 hs8-gov-3
+
+# Gov 4개가 모두 healthy인지 확인
+docker ps --filter "name=hs8-gov-" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+
+# Gov 각 노드의 피어 상태 확인. 모든 노드의 peers가 3개여야 함
+docker exec hs8-gov-0 wget -qO- http://127.0.0.1:5000/status
+docker exec hs8-gov-1 wget -qO- http://127.0.0.1:5000/status
+docker exec hs8-gov-2 wget -qO- http://127.0.0.1:5000/status
+docker exec hs8-gov-3 wget -qO- http://127.0.0.1:5000/status
+
+# ============================================================
+# 5. Hos 부트노드 실행: 호스트 포트 7000
+# ============================================================
+docker run -d --name hs8-hos-0 --network hotstuff8 --label hs.stack=hotstuff8 --restart unless-stopped -p 7000:5000 -v hs8-hos-0-data:/data -e Hos_ID=Hos-A -e PORT=5000 -e NODE_ADDR=hs8-hos-0:5000 -e BOOTSTRAP_ADDR=hs8-hos-0:5000 -e GOV_BOOTSTRAP_ADDR=hs8-gov-0:5000 -e Hos_DB_PATH=/data/blockchain_db -e BLOCK_HISTORY_PATH=/data/block_history.txt -e HOTSTUFF_BATCH_SIZE=200 -e HOTSTUFF_BATCH_TIMEOUT_SEC=3 -e HOTSTUFF_VIEW_TIMEOUT_SEC=8 --health-cmd "wget -qO- http://127.0.0.1:5000/status || exit 1" --health-interval 2s --health-timeout 2s --health-retries 30 hiyun2002/hos-node:hotstuff
+docker inspect -f '{{.State.Health.Status}}' hs8-hos-0
+docker logs --tail 100 hs8-hos-0
+
+# hs8-hos-0이 healthy가 된 다음 진행
+
+# ============================================================
+# 6. Hos 노드 1 실행: 호스트 포트 7001
+# ============================================================
+docker run -d --name hs8-hos-1 --network hotstuff8 --label hs.stack=hotstuff8 --restart unless-stopped -p 7001:5000 -v hs8-hos-1-data:/data -e Hos_ID=Hos-A -e PORT=5000 -e NODE_ADDR=hs8-hos-1:5000 -e BOOTSTRAP_ADDR=hs8-hos-0:5000 -e GOV_BOOTSTRAP_ADDR=hs8-gov-0:5000 -e Hos_DB_PATH=/data/blockchain_db -e BLOCK_HISTORY_PATH=/data/block_history.txt -e HOTSTUFF_BATCH_SIZE=200 -e HOTSTUFF_BATCH_TIMEOUT_SEC=3 -e HOTSTUFF_VIEW_TIMEOUT_SEC=8 --health-cmd "wget -qO- http://127.0.0.1:5000/status || exit 1" --health-interval 2s --health-timeout 2s --health-retries 30 hiyun2002/hos-node:hotstuff
+docker inspect -f '{{.State.Health.Status}}' hs8-hos-1
+docker logs --tail 100 hs8-hos-1
+
+# hs8-hos-1이 healthy가 된 다음 진행
+
+# ============================================================
+# 7. Hos 노드 2 실행: 호스트 포트 7002
+# ============================================================
+docker run -d --name hs8-hos-2 --network hotstuff8 --label hs.stack=hotstuff8 --restart unless-stopped -p 7002:5000 -v hs8-hos-2-data:/data -e Hos_ID=Hos-A -e PORT=5000 -e NODE_ADDR=hs8-hos-2:5000 -e BOOTSTRAP_ADDR=hs8-hos-0:5000 -e GOV_BOOTSTRAP_ADDR=hs8-gov-0:5000 -e Hos_DB_PATH=/data/blockchain_db -e BLOCK_HISTORY_PATH=/data/block_history.txt -e HOTSTUFF_BATCH_SIZE=200 -e HOTSTUFF_BATCH_TIMEOUT_SEC=3 -e HOTSTUFF_VIEW_TIMEOUT_SEC=8 --health-cmd "wget -qO- http://127.0.0.1:5000/status || exit 1" --health-interval 2s --health-timeout 2s --health-retries 30 hiyun2002/hos-node:hotstuff
+docker inspect -f '{{.State.Health.Status}}' hs8-hos-2
+docker logs --tail 100 hs8-hos-2
+
+# hs8-hos-2가 healthy가 된 다음 진행
+
+# ============================================================
+# 8. Hos 노드 3 실행: 호스트 포트 7003
+# ============================================================
+docker run -d --name hs8-hos-3 --network hotstuff8 --label hs.stack=hotstuff8 --restart unless-stopped -p 7003:5000 -v hs8-hos-3-data:/data -e Hos_ID=Hos-A -e PORT=5000 -e NODE_ADDR=hs8-hos-3:5000 -e BOOTSTRAP_ADDR=hs8-hos-0:5000 -e GOV_BOOTSTRAP_ADDR=hs8-gov-0:5000 -e Hos_DB_PATH=/data/blockchain_db -e BLOCK_HISTORY_PATH=/data/block_history.txt -e HOTSTUFF_BATCH_SIZE=200 -e HOTSTUFF_BATCH_TIMEOUT_SEC=3 -e HOTSTUFF_VIEW_TIMEOUT_SEC=8 --health-cmd "wget -qO- http://127.0.0.1:5000/status || exit 1" --health-interval 2s --health-timeout 2s --health-retries 30 hiyun2002/hos-node:hotstuff
+docker inspect -f '{{.State.Health.Status}}' hs8-hos-3
+docker logs --tail 100 hs8-hos-3
+
+# 전체 8개 컨테이너 확인. 정확히 8개가 표시되어야 함
+docker ps --filter "label=hs.stack=hotstuff8" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+
+# Hos 각 노드의 피어 상태 확인. 모든 노드의 peers가 3개여야 함
+docker exec hs8-hos-0 wget -qO- http://127.0.0.1:5000/status
+docker exec hs8-hos-1 wget -qO- http://127.0.0.1:5000/status
+docker exec hs8-hos-2 wget -qO- http://127.0.0.1:5000/status
+docker exec hs8-hos-3 wget -qO- http://127.0.0.1:5000/status
+
+# ============================================================
+# 컨테이너 내부 셸 접속 명령
+# 내부 셸에서 나오려면 exit 입력
+# ============================================================
+docker exec -it hs8-gov-0 sh
+docker exec -it hs8-gov-1 sh
+docker exec -it hs8-gov-2 sh
+docker exec -it hs8-gov-3 sh
+docker exec -it hs8-hos-0 sh
+docker exec -it hs8-hos-1 sh
+docker exec -it hs8-hos-2 sh
+docker exec -it hs8-hos-3 sh
+
+# 컨테이너 내부에서 사용할 상태 확인 명령
+wget -qO- http://127.0.0.1:5000/status
+
+# 컨테이너 내부에서 사용할 1번 블록 확인 명령
+wget -qO- "http://127.0.0.1:5000/block/index?id=1"
+
+# ============================================================
+# benchmark.py 실행
+# 컨테이너 내부가 아니라 호스트 PowerShell에서 실행
+# 1001을 지정하면 benchmark.py가 실제 요청 1000개를 전송
+# ============================================================
+Set-Location 'C:\Workspace\GO-Blockchain'
+$env:PYTHONIOENCODING='utf-8'
+python .\py_exper\benchmark.py 1001
+
+# Python 명령이 없을 때 사용할 대체 명령
+py -3 .\py_exper\benchmark.py 1001
+
+# ============================================================
+# 합의 로그 확인
+# -f 사용 시 Ctrl+C는 로그 보기만 종료하며 컨테이너는 계속 실행됨
+# ============================================================
+docker logs -f --tail 200 hs8-hos-0
+docker logs -f --tail 200 hs8-hos-1
+docker logs -f --tail 200 hs8-hos-2
+docker logs -f --tail 200 hs8-hos-3
+docker logs -f --tail 200 hs8-gov-0
+docker logs -f --tail 200 hs8-gov-1
+docker logs -f --tail 200 hs8-gov-2
+docker logs -f --tail 200 hs8-gov-3
+
+# 최신 상태 확인
+docker exec hs8-hos-0 wget -qO- http://127.0.0.1:5000/status
+docker exec hs8-gov-0 wget -qO- http://127.0.0.1:5000/status
+
+# 최신 블록 번호를 status의 height에서 확인한 후 id 값을 바꿔 실행
+docker exec hs8-hos-0 wget -qO- "http://127.0.0.1:5000/block/index?id=1"
+docker exec hs8-gov-0 wget -qO- "http://127.0.0.1:5000/block/index?id=1"
+
+# ============================================================
+# 컨테이너 중지 명령
+# ============================================================
+docker stop hs8-gov-0
+docker stop hs8-gov-1
+docker stop hs8-gov-2
+docker stop hs8-gov-3
+docker stop hs8-hos-0
+docker stop hs8-hos-1
+docker stop hs8-hos-2
+docker stop hs8-hos-3
+
+# 중지한 컨테이너 재시작 명령
+docker start hs8-gov-0
+docker start hs8-gov-1
+docker start hs8-gov-2
+docker start hs8-gov-3
+docker start hs8-hos-0
+docker start hs8-hos-1
+docker start hs8-hos-2
+docker start hs8-hos-3
+
+# 주의: 아래는 테스트 컨테이너 삭제 명령. 필요할 때만 실행
+docker rm -f hs8-gov-0
+docker rm -f hs8-gov-1
+docker rm -f hs8-gov-2
+docker rm -f hs8-gov-3
+docker rm -f hs8-hos-0
+docker rm -f hs8-hos-1
+docker rm -f hs8-hos-2
+docker rm -f hs8-hos-3
+
+# 주의: 아래는 테스트 블록체인 데이터 볼륨 삭제 명령. 데이터가 모두 삭제됨
+docker volume rm hs8-gov-0-data
+docker volume rm hs8-gov-1-data
+docker volume rm hs8-gov-2-data
+docker volume rm hs8-gov-3-data
+docker volume rm hs8-hos-0-data
+docker volume rm hs8-hos-1-data
+docker volume rm hs8-hos-2-data
+docker volume rm hs8-hos-3-data
+
+# 전용 네트워크 삭제. 컨테이너를 모두 삭제한 뒤 실행
+docker network rm hotstuff8

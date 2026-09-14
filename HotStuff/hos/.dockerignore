@@ -1,0 +1,6 @@
+.git
+.idea
+blockchain_db
+block_history.txt
+*.test
+*_test.go
