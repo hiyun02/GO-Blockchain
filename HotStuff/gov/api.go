@@ -105,16 +105,17 @@ func RegisterAPI(mux *http.ServeMux, chain *UpperChain) {
 		chainMu.Unlock()
 
 		writeJSON(w, http.StatusOK, map[string]any{
-			"addr":       self,
-			"height":     h,
-			"is_boot":    isBoot.Load(),
-			"bootAddr":   boot,
-			"started_at": startedAt.Format(time.RFC3339),
-			"peers":      peersSnapshot(),
-			"hos_boot":   hosBootMap,
-			"last_hash":  lastHash,
-			"batch_size": ConsensusBatchSize,
-			"consensus":  hotStuffStatus(),
+			"addr":                self,
+			"height":              h,
+			"is_boot":             isBoot.Load(),
+			"bootAddr":            boot,
+			"started_at":          startedAt.Format(time.RFC3339),
+			"peers":               peersSnapshot(),
+			"hos_boot":            hosBootMap,
+			"hos_representatives": representativeSnapshot(),
+			"last_hash":           lastHash,
+			"batch_size":          ConsensusBatchSize,
+			"consensus":           hotStuffStatus(),
 		})
 	})
 

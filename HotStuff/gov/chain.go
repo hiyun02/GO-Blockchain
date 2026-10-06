@@ -115,6 +115,9 @@ func onBlockReceived(ub UpperBlock) error {
 	if err := setLatestHeight(ub.Index); err != nil {
 		return fmt.Errorf("set height: %w", err)
 	}
+	if err := applyRepresentativeChangesFromBlock(ub); err != nil {
+		return fmt.Errorf("Hos 대표 변경 적용 실패: %w", err)
+	}
 
 	ch.lastBlockTime = time.Now()
 

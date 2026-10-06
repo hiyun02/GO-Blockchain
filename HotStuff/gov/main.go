@@ -25,6 +25,7 @@ func main() {
 	defer closeDB()
 	log.Printf("[시작] Gov LevelDB 경로: %s\n", dbPath)
 	loadAllAnchorsAtBoot()
+	loadHosRepresentativesAtBoot()
 	log.Printf("[시작] 저장된 Hos 앵커를 복원했습니다: %s\n", dbPath)
 
 	// 3) 체인 부팅 (제네시스 자동 생성/복구 포함)
@@ -55,6 +56,7 @@ func main() {
 	mux.HandleFunc("/bootNotify", bootNotify)
 	mux.HandleFunc("/addAnchor", addAnchor)
 	mux.HandleFunc("/hosBootNotify", hosBootNotify)
+	mux.HandleFunc("/consensus/validators", handleConsensusValidators)
 
 	mux.Handle("/", http.FileServer(http.Dir("./static")))
 

@@ -81,22 +81,32 @@ func makeAnchorSignature(privPem, hashStr, _ string) string {
 // Gov로 MerkleRoot 제출 (부트노드에서만 실행됨)
 func submitAnchor(block LowerBlock) {
 	ensureKeyPair() // 키 없으면 생성
+	ensureGovRepresentativeKeyPair()
 	privPem, _ := getMeta("meta_hos_privkey")
+	govPublicKey, ok := getMeta("meta_gov_rep_pubkey")
+	if !ok {
+		log.Printf("[Gov 대표][앵커 오류] Gov 합의 전용 공개키를 찾을 수 없습니다.")
+		return
+	}
 
 	ts := time.Unix(time.Now().Unix(), 0).Format(time.RFC3339)
-	sig := makeAnchorSignature(privPem, block.MerkleRoot, ts)
-
-	req := map[string]any{
-		"hos_id":   selfID(),
-		"hos_boot": self, // ex: "hos-boot:5000"
-		"root":     block.MerkleRoot,
-		"ts":       ts,
-		"sig":      sig,
+	req := GovAnchorSubmission{
+		HosID:          selfID(),
+		HosBoot:        self,
+		Root:           block.MerkleRoot,
+		Ts:             ts,
+		LowerHeight:    block.Index,
+		LowerBlockHash: block.BlockHash,
+		GovEndpoint:    govRepresentativeEndpoint(),
+		GovPublicKey:   govPublicKey,
+		LeadershipTerm: uint64(block.Index),
 	}
+	req.Sig = makeAnchorSignature(privPem, hex.EncodeToString(govAnchorSubmissionDigest(req)), ts)
 
 	body, _ := json.Marshal(req)
 	govURL := "http://" + govBoot + "/addAnchor"
-	log.Printf("[앵커] Gov 부트노드로 앵커를 전송합니다: %s", govBoot)
+	log.Printf("[앵커][전송] Gov=%s, Hos=%s, 하위높이=%d, 대표합의주소=%s, 블록=%s",
+		govBoot, req.HosID, req.LowerHeight, req.GovEndpoint, shortHash(req.LowerBlockHash))
 	resp, err := http.Post(govURL, "application/json", bytes.NewReader(body))
 	if err != nil {
 		log.Printf("[앵커][오류] Gov 체인 앵커 제출 실패: %v", err)
@@ -105,9 +115,18 @@ func submitAnchor(block LowerBlock) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusOK {
-		log.Printf("[앵커][성공] Gov 체인이 앵커를 승인했습니다. (루트=%s)", block.MerkleRoot[:8])
+		var result struct {
+			Status               string `json:"status"`
+			RepresentativeChange string `json:"representative_change"`
+			GovEndpoint          string `json:"gov_endpoint"`
+			Activation           string `json:"activation"`
+		}
+		_ = json.NewDecoder(resp.Body).Decode(&result)
+		log.Printf("[앵커][승인] Gov 대기열 등록 완료. 하위높이=%d, 루트=%s", block.Index, shortHash(block.MerkleRoot))
+		log.Printf("[Gov 대표][%s 대기] 합의주소=%s. 현재 Gov 블록 확정 후 다음 Gov 합의부터 참여합니다.",
+			result.RepresentativeChange, req.GovEndpoint)
 	} else {
-		log.Printf("[앵커][경고] Gov 체인이 앵커를 거부했습니다. (상태=%d)", resp.StatusCode)
+		log.Printf("[앵커][경고] Gov 체인이 앵커를 거부했습니다. (상태=%d, 하위높이=%d)", resp.StatusCode, block.Index)
 	}
 }
 

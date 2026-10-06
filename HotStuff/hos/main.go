@@ -56,12 +56,20 @@ func main() {
 	mux.HandleFunc("/getPublicKey", getPublicKey)
 	mux.HandleFunc("/chgGovBoot", chgGovBoot)
 	mux.HandleFunc("/govBootNotify", govBootNotify)
+	// 동일 Hos 프로세스 안에서 경로만 분리하여 Gov 합의 검증자 역할을 수행한다.
+	// 현재 Hos 리더가 아닌 노드는 이 경로의 합의 요청을 거부한다.
+	mux.HandleFunc("/gov/hotstuff/propose", handleGovHotStuffProposal)
+	mux.HandleFunc("/gov/hotstuff/vote", handleGovHotStuffVote)
+	mux.HandleFunc("/gov/hotstuff/qc", handleGovHotStuffQC)
+	mux.HandleFunc("/gov/status", handleGovRepresentativeStatus)
 
 	mux.Handle("/", http.FileServer(http.Dir("./static")))
 
 	// 5) 앵커 서명을 위한 key pair 생성
 	ensureKeyPair()
+	ensureGovRepresentativeKeyPair()
 	initializeHotStuff()
+	log.Printf("[Gov 대표][준비] 합의주소=%s, 현재 Hos 리더일 때만 Gov 합의에 참여합니다.", govRepresentativeEndpoint())
 
 	// 6) 서버 시작 (REST 요청 수신 가능한 상태로 돌입)
 	go func() {

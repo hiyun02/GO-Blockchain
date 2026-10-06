@@ -62,18 +62,21 @@ func makeAnchorSignature(privPem, hashStr, _ string) string {
 
 // Gov에서 Hos가 제출한 앵커를 수신하고 검증한 후 pending 추가함수 호출(부트노드만 수행)
 func addAnchor(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		HosID   string `json:"hos_id"`
-		HosBoot string `json:"hos_boot"`
-		Root    string `json:"root"`
-		Ts      string `json:"ts"`
-		Sig     string `json:"sig"`
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST 요청만 허용됩니다", http.StatusMethodNotAllowed)
+		return
 	}
+	var req AnchorSubmission
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid JSON", 400)
 		return
 	}
 	defer r.Body.Close()
+	if req.HosID == "" || req.HosBoot == "" || req.Root == "" || req.Sig == "" ||
+		req.LowerHeight <= 0 || req.LowerBlockHash == "" || req.GovEndpoint == "" || req.GovPublicKey == "" {
+		http.Error(w, "앵커 또는 Gov 대표 필수 정보가 비어 있습니다", http.StatusBadRequest)
+		return
+	}
 
 	// Hos의 공개키 가져오기
 	resp, err := http.Get("http://" + req.HosBoot + "/getPublicKey")
@@ -82,59 +85,27 @@ func addAnchor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		http.Error(w, "Hos 리더 공개키 조회가 거부되었습니다", http.StatusBadGateway)
+		return
+	}
 
 	// Hos 노드로부터 전송받은 공개키(PEM 형식)를 전체 읽음
 	pubPem, _ := io.ReadAll(resp.Body)
 
-	// PEM 포맷(-----BEGIN PUBLIC KEY-----)을 디코딩하여 DER 형식으로 변환
-	block, _ := pem.Decode(pubPem)
-	if block == nil {
-		http.Error(w, "invalid public key pem", http.StatusBadRequest)
+	if !verifyECDSA(string(pubPem), anchorSubmissionDigest(req), req.Sig) {
+		http.Error(w, "앵커/대표 위임 서명이 유효하지 않습니다", http.StatusForbidden)
+		log.Printf("[앵커][거부] Hos=%s의 대표 위임 서명이 유효하지 않습니다.", req.HosID)
 		return
 	}
-	pubIfc, err := x509.ParsePKIXPublicKey(block.Bytes)
+	change, err := representativeChangeFromAnchor(req, string(pubPem))
 	if err != nil {
-		http.Error(w, "invalid public key", http.StatusBadRequest)
+		http.Error(w, err.Error(), http.StatusConflict)
+		log.Printf("[Gov 대표][변경 거부] Hos=%s, 사유=%v", req.HosID, err)
 		return
 	}
-	pubKey, ok := pubIfc.(*ecdsa.PublicKey)
-	if !ok {
-		http.Error(w, "not an ECDSA public key", http.StatusBadRequest)
-		return
-	}
-
-	// Hos는 MerkleRoot hex를 그대로 digest로 사용해 서명한다.
-	hash, err := hex.DecodeString(req.Root)
-	if err != nil {
-		http.Error(w, "invalid root hex", http.StatusBadRequest)
-		return
-	}
-
-	// DER 디코딩
-	sigBytes, _ := hex.DecodeString(req.Sig)
-
-	type ecdsaSignature struct {
-		R, S *big.Int
-	}
-
-	var sigStruct ecdsaSignature
-	_, err = asn1.Unmarshal(sigBytes, &sigStruct)
-	if err != nil {
-		http.Error(w, "invalid signature format", 403)
-		return
-	}
-
-	if sigStruct.R == nil || sigStruct.S == nil {
-		http.Error(w, "invalid signature values", http.StatusForbidden)
-		return
-	}
-	valid := ecdsa.Verify(pubKey, hash, sigStruct.R, sigStruct.S)
-
-	if !valid {
-		http.Error(w, "invalid signature", 403)
-		log.Printf("[ANCHOR][INVALID] rejected from %s", req.HosID)
-		return
-	}
+	log.Printf("[Gov 대표][%s 대기] Hos=%s, 리더=%s, 합의주소=%s, 하위높이=%d. 이번 Gov 블록 확정 후 활성화됩니다.",
+		change.Action, req.HosID, req.HosBoot, req.GovEndpoint, req.LowerHeight)
 
 	// AnchorRecord 구성 (계약 정보는 현재 비워둠)
 	ar := AnchorRecord{
@@ -143,11 +114,13 @@ func addAnchor(w http.ResponseWriter, r *http.Request) {
 		LowerRoot:        req.Root,
 		AccessCatalog:    []string{}, // 비어있는 접근 리스트
 		AnchorTimestamp:  req.Ts,
+		Representative:   change,
 	}
 
 	// pending 에 anchor 객체 전체 추가
 	appendPending([]AnchorRecord{ar})
-	log.Printf("[앵커] Hos %s의 검증된 루트를 Gov 합의 대기열에 추가했습니다. (루트=%s)", req.HosID, shortHash(req.Root))
+	log.Printf("[앵커][대기열] Hos=%s, 하위블록=%d, 루트=%s, Gov대표=%s",
+		req.HosID, req.LowerHeight, shortHash(req.Root), req.GovEndpoint)
 
 	// AnchorRoot LevelDB 저장
 	if err := saveAnchorToDB(req.HosID, req.Root, req.Ts); err != nil {
@@ -164,13 +137,10 @@ func addAnchor(w http.ResponseWriter, r *http.Request) {
 	// 앵커 저장
 	log.Printf("[ANCHOR] Verified & adding anchor from Hos Chain ... %s : %s)", req.HosID, anchorMap[req.HosID].Root)
 
-	// 새로 수신한 Hos 부트노드의 주소가, 기존 Hos체인의 부트노드 주소와 다른 경우
-	if req.HosBoot != getHosBootAddr(req.HosID) {
-		// 송신한 Hos체인의 HosID와 부트노드 주소를 저장한 후 다른 gov 노드에 전파함
-		log.Printf("[ANCHOR] Call broadcastNewHosBoot() for store %s : %s to HosBootMap ... )", req.HosID, req.HosBoot)
-		broadcastNewHosBoot(req.HosID, req.HosBoot)
-	}
-	w.WriteHeader(http.StatusOK)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status": "ACCEPTED", "representative_change": change.Action,
+		"gov_endpoint": req.GovEndpoint, "activation": "AFTER_CURRENT_GOV_BLOCK",
+	})
 }
 
 // Hos가 반환하는 검색 응답 구조체

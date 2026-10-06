@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -23,7 +24,7 @@ import (
 
 // 전역 DB 핸들 (단일 프로세스 내에서 공유)
 var db *leveldb.DB
-var blockHistoryPath = getEnvDefault("BLOCK_HISTORY_PATH", "block_history.txt")
+var blockHistoryPath = getEnvDefault("BLOCK_HISTORY_PATH", "block_history.csv")
 
 // ---- 내부 메타키 헬퍼 ---------------------------------------------------------
 func putMeta(key, val string) error {
@@ -302,6 +303,11 @@ func appendBlockLog(block LowerBlock) {
 		return
 	}
 	defer f.Close()
+	fileInfo, err := f.Stat()
+	if err != nil {
+		log.Printf("[CSV][오류] Hos 블록 이력 파일 상태 확인 실패: %v", err)
+		return
+	}
 
 	// 1 & 2번 지표: block.go에서 만든 함수 호출
 	totalMB, payloadRatio := block.GetSizeMetrics()
@@ -312,23 +318,31 @@ func appendBlockLog(block LowerBlock) {
 	if err == nil {
 		latency = time.Since(startTime).Seconds()
 	}
-	// Index: 블록번호
-	// Entries: 데이터 건수
-	// Size: 블록 전체 용량 (MB)
-	// Payload: 순수 데이터 비중 (%) -> 100 - 헤더비율
-	// Latency: 합의 및 저장 소요시간 (초)
-	line := fmt.Sprintf("Idx:%d, Entries:%d, Size:%.6fMB, Payload:%.2f%%, EndStamp: %s, Latency:%.4fs\n",
-		block.Index,
-		len(block.Entries),
-		totalMB,
-		payloadRatio,
-		time.Now().UTC().Format("15:04:05.000"),
-		latency,
-	)
-
-	if _, err := f.WriteString(line); err != nil {
-		log.Printf("[로그][오류] 블록 이력 쓰기 실패: %v", err)
+	writer := csv.NewWriter(f)
+	if fileInfo.Size() == 0 {
+		if err := writer.Write([]string{"index", "entries", "size_mb", "payload_percent", "end_timestamp", "latency_seconds"}); err != nil {
+			log.Printf("[CSV][오류] Hos 블록 이력 헤더 쓰기 실패: %v", err)
+			return
+		}
 	}
+	record := []string{
+		strconv.Itoa(block.Index),
+		strconv.Itoa(len(block.Entries)),
+		strconv.FormatFloat(totalMB, 'f', 6, 64),
+		strconv.FormatFloat(payloadRatio, 'f', 2, 64),
+		time.Now().UTC().Format(time.RFC3339Nano),
+		strconv.FormatFloat(latency, 'f', 4, 64),
+	}
+	if err := writer.Write(record); err != nil {
+		log.Printf("[CSV][오류] Hos 블록 이력 행 쓰기 실패: %v", err)
+		return
+	}
+	writer.Flush()
+	if err := writer.Error(); err != nil {
+		log.Printf("[CSV][오류] Hos 블록 이력 저장 실패: %v", err)
+		return
+	}
+	log.Printf("[CSV][저장] Hos 블록 #%d 결과를 기록했습니다: %s", block.Index, blockHistoryPath)
 }
 
 // 로컬 체인을 완전히 초기화하고 제네시스 블록만 재생성

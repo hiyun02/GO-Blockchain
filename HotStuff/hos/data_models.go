@@ -58,11 +58,12 @@ type ContractData struct {
 ////////////////////////////////////////////////////////////////////////////////
 
 type AnchorRecord struct {
-	HosID            string       `json:"hos_id"`            // 진료 정보 제공자 ID
-	ContractSnapshot ContractData `json:"contract_snapshot"` // 계약 상태 스냅샷
-	LowerRoot        string       `json:"lower_root"`        // Hos 체인에서 전달된 머클 루트 (서명 포함)
-	AccessCatalog    []string     `json:"access_catalog"`    // 접근 가능한 진료 정보 리스트
-	AnchorTimestamp  string       `json:"anchor_ts"`         // 앵커가 제출된 시간
+	HosID            string                   `json:"hos_id"`            // 진료 정보 제공자 ID
+	ContractSnapshot ContractData             `json:"contract_snapshot"` // 계약 상태 스냅샷
+	LowerRoot        string                   `json:"lower_root"`        // Hos 체인에서 전달된 머클 루트 (서명 포함)
+	AccessCatalog    []string                 `json:"access_catalog"`    // 접근 가능한 진료 정보 리스트
+	AnchorTimestamp  string                   `json:"anchor_ts"`         // 앵커가 제출된 시간
+	Representative   *GovRepresentativeChange `json:"representative,omitempty"`
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -74,11 +75,16 @@ type AnchorRecord struct {
 ////////////////////////////////////////////////////////////////////////////////
 
 type UpperBlock struct {
-	Index      int            `json:"index"`       // 블록 번호
-	GovID      string         `json:"gov_id"`      // Gov 체인 식별자
-	PrevHash   string         `json:"prev_hash"`   // 이전 블록의 해시
-	Timestamp  string         `json:"timestamp"`   // 생성 시간 (RFC3339 형식)
-	Records    []AnchorRecord `json:"records"`     // Hos 체인에서 제출한 AnchorRecord 목록
-	MerkleRoot string         `json:"merkle_root"` // AnchorRecords 속 MerkleRoot들을 병합하여 계산한 상위 MerkleRoot
-	BlockHash  string         `json:"block_hash"`  // 블록 전체 해시
+	Index             int               `json:"index"`
+	GovID             string            `json:"gov_id"`
+	PrevHash          string            `json:"prev_hash"`
+	Timestamp         string            `json:"timestamp"`
+	Records           []AnchorRecord    `json:"records"`
+	MerkleRoot        string            `json:"merkle_root"`
+	ConfigurationHash string            `json:"configuration_hash,omitempty"`
+	Proposer          string            `json:"proposer"`
+	Signatures        []string          `json:"signatures"`
+	HotStuff          *GovHotStuffProof `json:"hotstuff,omitempty"`
+	BlockHash         string            `json:"block_hash"`
+	Elapsed           float32           `json:"elapsed"`
 }

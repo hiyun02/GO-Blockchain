@@ -312,6 +312,9 @@ func validateProposal(proposal hotStuffProposal) error {
 	if !isSortedUnique(proposal.Participants) || !containsString(proposal.Participants, proposal.Leader) || !containsString(proposal.Participants, self) {
 		return fmt.Errorf("참여자 스냅샷이 유효하지 않습니다")
 	}
+	if expected := consensusParticipants(); !sameStringList(proposal.Participants, expected) {
+		return fmt.Errorf("확정된 Gov 검증자 집합과 제안 참여자가 다릅니다: 현재=%v 제안=%v", expected, proposal.Participants)
+	}
 	height, ok := getLatestHeight()
 	if !ok || height < 0 {
 		return fmt.Errorf("로컬 제네시스 블록이 없습니다")
@@ -374,7 +377,11 @@ func handleHotStuffVote(w http.ResponseWriter, r *http.Request) {
 	}
 	count := len(collector.votes)
 	required := quorumSizeFor(len(state.Participants))
-	log.Printf("[HotStuff][%s 투표] 뷰=%d, 서명자=%s, 수집=%d/%d", vote.Phase, vote.View, vote.Voter, count, required)
+	voterRole := "Gov 노드"
+	if isHosRepresentativeEndpoint(vote.Voter) {
+		voterRole = "Hos 리더 대표"
+	}
+	log.Printf("[HotStuff][%s 투표] 뷰=%d, 서명자=%s, 역할=%s, 수집=%d/%d", vote.Phase, vote.View, vote.Voter, voterRole, count, required)
 	if count < required {
 		state.mu.Unlock()
 		w.WriteHeader(http.StatusAccepted)
@@ -595,9 +602,12 @@ func publicKeyFor(address string) (string, bool) {
 		return getMeta("meta_gov_pubkey")
 	}
 	pkMu.RLock()
-	defer pkMu.RUnlock()
 	key, ok := peerPubKeys[address]
-	return key, ok && key != ""
+	pkMu.RUnlock()
+	if ok && key != "" {
+		return key, true
+	}
+	return representativePublicKey(address)
 }
 
 func safeToVote(block UpperBlock, justify *QuorumCertificate) bool {
@@ -669,12 +679,29 @@ func consensusParticipants() []string {
 			set[peer] = struct{}{}
 		}
 	}
+	for _, endpoint := range representativeEndpoints() {
+		if endpoint != "" {
+			set[endpoint] = struct{}{}
+		}
+	}
 	participants := make([]string, 0, len(set))
 	for node := range set {
 		participants = append(participants, node)
 	}
 	sort.Strings(participants)
 	return participants
+}
+
+func sameStringList(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func quorumSizeFor(n int) int {

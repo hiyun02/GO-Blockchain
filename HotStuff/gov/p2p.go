@@ -60,6 +60,12 @@ func validateUpperBlock(newBlk, prevBlk UpperBlock) error {
 	if expectedRoot != newBlk.MerkleRoot {
 		return fmt.Errorf("merkle_root mismatch: want=%s got=%s", expectedRoot, newBlk.MerkleRoot)
 	}
+	if expected := computeRepresentativeChangesHash(newBlk.Records); expected != newBlk.ConfigurationHash {
+		return fmt.Errorf("configuration_hash mismatch: want=%s got=%s", expected, newBlk.ConfigurationHash)
+	}
+	if err := validateRepresentativeChanges(newBlk.Records); err != nil {
+		return fmt.Errorf("Hos 대표 변경 검증 실패: %w", err)
+	}
 	// 5) BlockHash 재계산
 	blockHash := newBlk.computeHash()
 	if blockHash != newBlk.BlockHash {
@@ -158,6 +164,11 @@ func syncChain(peer string) {
 		if err := setLatestHeight(nb.Index); err != nil {
 			chainMu.Unlock()
 			log.Printf("[P2P] setLatestHeight error: %v\n", err)
+			return
+		}
+		if err := applyRepresentativeChangesFromBlock(nb); err != nil {
+			chainMu.Unlock()
+			log.Printf("[P2P][Gov 대표] 블록 #%d 대표 변경 적용 실패: %v\n", nb.Index, err)
 			return
 		}
 

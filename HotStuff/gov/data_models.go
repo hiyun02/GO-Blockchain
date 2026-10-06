@@ -77,9 +77,10 @@ type ContractData struct {
 ////////////////////////////////////////////////////////////////////////////////
 
 type AnchorRecord struct {
-	HosID            string       `json:"hos_id"`            // 진료 정보 제공자 ID
-	ContractSnapshot ContractData `json:"contract_snapshot"` // 계약 상태 스냅샷
-	LowerRoot        string       `json:"lower_root"`        // Hos 체인에서 전달된 머클 루트 (서명 포함)
-	AccessCatalog    []string     `json:"access_catalog"`    // 접근 가능한 진료 정보 리스트
-	AnchorTimestamp  string       `json:"anchor_ts"`         // 앵커가 제출된 시간
+	HosID            string                   `json:"hos_id"`            // 진료 정보 제공자 ID
+	ContractSnapshot ContractData             `json:"contract_snapshot"` // 계약 상태 스냅샷
+	LowerRoot        string                   `json:"lower_root"`        // Hos 체인에서 전달된 머클 루트 (서명 포함)
+	AccessCatalog    []string                 `json:"access_catalog"`    // 접근 가능한 진료 정보 리스트
+	AnchorTimestamp  string                   `json:"anchor_ts"`         // 앵커가 제출된 시간
+	Representative   *HosRepresentativeChange `json:"representative,omitempty"`
 }
