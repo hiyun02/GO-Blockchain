@@ -42,7 +42,7 @@ type LowerBlock struct {
 	Timestamp  string         `json:"timestamp"`   // 생성 시간 (RFC3339 형식)
 	Entries    []ClinicRecord `json:"entries"`     // 블록 내 진료 정보 목록
 	MerkleRoot string         `json:"merkle_root"` // Entries의 해시 기반 머클루트
-	Nonce      int            `json:"nonce"`       // PoW 성공 시점의 Nonce
+	Nonce      uint64         `json:"nonce"`       // PoW 성공 시점의 Nonce (0 ~ 2^64-1)
 	Difficulty int            `json:"difficulty"`  // 난이도 (ex: 4 => "0000"으로 시작)
 	BlockHash  string         `json:"block_hash"`  // 블록 전체 해시 (헤더 기준)
 	Elapsed    float32        `json:"elapsed"`     // 채굴 소요 시간

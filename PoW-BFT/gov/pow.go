@@ -27,13 +27,13 @@ type PoWHeader struct {
 	MerkleRoot string `json:"merkle_root"`
 	Timestamp  string `json:"timestamp"`
 	Difficulty int    `json:"difficulty"`
-	Nonce      int    `json:"nonce"`
+	Nonce      uint64 `json:"nonce"`
 }
 
 // 채굴 성공 결과
 type MineResult struct {
 	BlockHash string
-	Nonce     int
+	Nonce     uint64
 	Header    PoWHeader
 	Elapsed   float32
 }
@@ -151,9 +151,10 @@ func mineBlock(difficulty int, anchors []AnchorRecord) MineResult {
 
 	log.Printf("[PoW] Starting mining (index=%d prev=%s...)", index, prevHash[:8])
 
-	// Nonce 탐색
+	// uint64 전체 범위(0 ~ 2^64-1)에서 임의의 시작 Nonce를 선택해 탐색한다.
+	// uint64이므로 음수 Nonce는 생성되지 않는다.
 	rand.Seed(time.Now().UnixNano())
-	nonce := rand.Intn(4294967296)
+	nonce := rand.Uint64()
 
 	var hash string
 

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -23,6 +24,7 @@ import (
 
 // 전역 DB 핸들 (단일 프로세스 내에서 공유)
 var db *leveldb.DB
+var blockHistoryPath = getEnvDefault("BLOCK_HISTORY_PATH", "block_history.csv")
 
 // ---- 내부 메타키 헬퍼 ---------------------------------------------------------
 func putMeta(key, val string) error {
@@ -241,20 +243,42 @@ func selfID() string {
 }
 
 func appendBlockLog(block UpperBlock) {
-	f, err := os.OpenFile("block_history.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	f, err := os.OpenFile(blockHistoryPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		log.Printf("[LOG][ERROR] cannot open blockHistory file: %v", err)
 		return
 	}
 	defer f.Close()
-	// txt 파일에 저장할 내용
-	line := fmt.Sprintf("Block #%02d, Entries : %04d, EndStamp : %s, Difficulty : %d \n",
-		block.Index, len(block.Records), time.Unix(time.Now().Unix(), 0).Format(time.RFC3339), block.Difficulty)
-
-	if _, err := f.WriteString(line); err != nil {
-		log.Printf("[LOG][ERROR] cannot write blockHistory: %v", err)
+	fileInfo, err := f.Stat()
+	if err != nil {
+		log.Printf("[CSV][오류] Gov 블록 이력 파일 상태 확인 실패: %v", err)
+		return
 	}
-	log.Printf("[LOG][WRITE] Success to Write BlockHistory: %v", err)
+
+	writer := csv.NewWriter(f)
+	if fileInfo.Size() == 0 {
+		if err := writer.Write([]string{"index", "anchors", "end_timestamp", "consensus", "latency_seconds"}); err != nil {
+			log.Printf("[CSV][오류] Gov 블록 이력 헤더 쓰기 실패: %v", err)
+			return
+		}
+	}
+	record := []string{
+		strconv.Itoa(block.Index),
+		strconv.Itoa(len(block.Records)),
+		time.Now().UTC().Format(time.RFC3339Nano),
+		"PoW",
+		strconv.FormatFloat(float64(block.Elapsed), 'f', 4, 32),
+	}
+	if err := writer.Write(record); err != nil {
+		log.Printf("[CSV][오류] Gov 블록 이력 행 쓰기 실패: %v", err)
+		return
+	}
+	writer.Flush()
+	if err := writer.Error(); err != nil {
+		log.Printf("[CSV][오류] Gov 블록 이력 저장 실패: %v", err)
+		return
+	}
+	log.Printf("[CSV][저장] Gov 블록 #%d 결과를 기록했습니다: %s", block.Index, blockHistoryPath)
 }
 
 // 로컬 체인을 완전히 초기화하고 제네시스 블록만 재생성

@@ -81,7 +81,7 @@ type UpperBlock struct {
 	Timestamp  string         `json:"timestamp"`   // 생성 시간 (RFC3339 형식)
 	Records    []AnchorRecord `json:"records"`     // Hos 체인에서 제출한 AnchorRecord 목록
 	MerkleRoot string         `json:"merkle_root"` // AnchorRecords 속 MerkleRoot들을 병합하여 계산한 상위 MerkleRoot
-	Nonce      int            `json:"nonce"`       // PoW용 Nonce
+	Nonce      uint64         `json:"nonce"`       // PoW용 Nonce (0 ~ 2^64-1)
 	Difficulty int            `json:"difficulty"`  // 난이도
 	BlockHash  string         `json:"block_hash"`  // 블록 전체 해시
 }

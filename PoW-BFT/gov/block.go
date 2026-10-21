@@ -23,7 +23,7 @@ type UpperBlock struct {
 	Timestamp  string         `json:"timestamp"`   // 생성 시간 (RFC3339 형식)
 	Records    []AnchorRecord `json:"records"`     // Hos 체인에서 제출한 AnchorRecord 목록
 	MerkleRoot string         `json:"merkle_root"` // AnchorRecords 속 MerkleRoot들을 병합하여 계산한 상위 MerkleRoot
-	Nonce      int            `json:"nonce"`       // PoW용 Nonce
+	Nonce      uint64         `json:"nonce"`       // PoW용 Nonce (0 ~ 2^64-1)
 	Difficulty int            `json:"difficulty"`  // 난이도
 	BlockHash  string         `json:"block_hash"`  // 블록 전체 해시
 	Elapsed    float32        `json:"elapsed"`     // 채굴 소요 시간
@@ -48,7 +48,7 @@ func mineGenesisBlock(govID string) UpperBlock {
 	}
 
 	// === 제네시스 Nonce 탐색 ===
-	nonce := 0
+	nonce := uint64(0)
 	var hash string
 
 	for {
@@ -91,7 +91,7 @@ func (b UpperBlock) computeHash() string {
 		PrevHash   string `json:"prev_hash"`
 		Timestamp  string `json:"timestamp"`
 		MerkleRoot string `json:"merkle_root"`
-		Nonce      int    `json:"nonce"`
+		Nonce      uint64 `json:"nonce"`
 		Difficulty int    `json:"difficulty"`
 	}{
 		Index:      b.Index,
