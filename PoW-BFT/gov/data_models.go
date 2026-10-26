@@ -79,9 +79,50 @@ type ContractData struct {
 ////////////////////////////////////////////////////////////////////////////////
 
 type AnchorRecord struct {
-	HosID            string       `json:"hos_id"`            // 진료 정보 제공자 ID
-	ContractSnapshot ContractData `json:"contract_snapshot"` // 계약 상태 스냅샷
-	LowerRoot        string       `json:"lower_root"`        // Hos 체인에서 전달된 머클 루트 (서명 포함)
-	AccessCatalog    []string     `json:"access_catalog"`    // 접근 가능한 진료 정보 리스트
-	AnchorTimestamp  string       `json:"anchor_ts"`         // 앵커가 제출된 시간
+	HosID            string                   `json:"hos_id"`                   // 진료 정보 제공자 ID
+	ContractSnapshot ContractData             `json:"contract_snapshot"`        // 계약 상태 스냅샷
+	LowerRoot        string                   `json:"lower_root"`               // Hos 체인에서 전달된 머클 루트 (서명 포함)
+	AccessCatalog    []string                 `json:"access_catalog"`           // 접근 가능한 진료 정보 리스트
+	AnchorTimestamp  string                   `json:"anchor_ts"`                // 앵커가 제출된 시간
+	Representative   *PoWRepresentativeChange `json:"representative,omitempty"` // 다음 Gov PoW부터 참여할 Hos 리더 정보
+}
+
+// PoWRepresentative는 Hos 리더가 Gov PoW에 참여할 때 사용하는 대표 정보다.
+type PoWRepresentative struct {
+	HosID            string `json:"hos_id"`
+	LeaderAddr       string `json:"leader_addr"`
+	Endpoint         string `json:"gov_endpoint"`
+	LeadershipTerm   uint64 `json:"leadership_term"`
+	LowerHeight      int    `json:"lower_height"`
+	LowerBlockHash   string `json:"lower_block_hash"`
+	ActivationHeight int    `json:"activation_height"`
+	RegisteredAt     string `json:"registered_at"`
+}
+
+// PoWRepresentativeChange는 대표 등록과 교체를 앵커 서명에 묶어 Gov 장부에 남긴다.
+type PoWRepresentativeChange struct {
+	Action                 string            `json:"action"`
+	Representative         PoWRepresentative `json:"representative"`
+	HosLeaderPublicKey     string            `json:"hos_leader_public_key"`
+	AuthorizationSignature string            `json:"authorization_signature"`
+}
+
+// GovAnchorSubmission은 앵커와 Gov PoW 대표 위임 정보를 함께 서명하는 요청이다.
+type GovAnchorSubmission struct {
+	HosID          string `json:"hos_id"`
+	HosBoot        string `json:"hos_boot"`
+	Root           string `json:"root"`
+	Ts             string `json:"ts"`
+	Sig            string `json:"sig"`
+	LowerHeight    int    `json:"lower_height"`
+	LowerBlockHash string `json:"lower_block_hash"`
+	GovEndpoint    string `json:"gov_endpoint"`
+	LeadershipTerm uint64 `json:"leadership_term"`
+}
+
+// PoWMiningRequest는 한 번의 Gov PoW에 사용할 입력과 참가자 구성을 고정한다.
+type PoWMiningRequest struct {
+	Anchors      []AnchorRecord `json:"anchors"`
+	Participants []string       `json:"participants"`
+	Difficulty   int            `json:"difficulty"`
 }

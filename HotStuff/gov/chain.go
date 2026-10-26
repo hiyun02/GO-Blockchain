@@ -87,6 +87,16 @@ func newUpperChain(govID string) (*UpperChain, error) {
 
 // 수신된 블록 검증 및 반영
 func onBlockReceived(ub UpperBlock) error {
+	return acceptBlock(ub, false)
+}
+
+// onVerifiedBlockReceived는 현재 뷰에서 단계별 QC를 이미 검증한 결정 블록을 반영한다.
+// P2P 동기화처럼 외부에서 받은 블록은 이 함수를 사용하지 않고 합의 증거를 다시 검증해야 한다.
+func onVerifiedBlockReceived(ub UpperBlock) error {
+	return acceptBlock(ub, true)
+}
+
+func acceptBlock(ub UpperBlock, consensusEvidenceVerified bool) error {
 	chainMu.Lock()
 	defer chainMu.Unlock()
 
@@ -102,8 +112,10 @@ func onBlockReceived(ub UpperBlock) error {
 	if err := validateUpperBlock(ub, previous); err != nil {
 		return fmt.Errorf("HotStuff 결정 Gov 블록 구조 검증 실패: %w", err)
 	}
-	if err := verifyConsensusEvidence(ub); err != nil {
-		return fmt.Errorf("HotStuff Gov 합의 증거 검증 실패: %w", err)
+	if !consensusEvidenceVerified {
+		if err := verifyConsensusEvidence(ub); err != nil {
+			return fmt.Errorf("HotStuff Gov 합의 증거 검증 실패: %w", err)
+		}
 	}
 
 	if err := saveBlockToDB(ub); err != nil {
@@ -154,6 +166,16 @@ func verifyConsensusEvidence(ub UpperBlock) error {
 	}
 	if proof.PrepareQC.View != proof.PreCommitQC.View || proof.PreCommitQC.View != proof.CommitQC.View {
 		return fmt.Errorf("Gov QC 뷰 번호가 서로 다릅니다")
+	}
+	if proof.View != proof.CommitQC.View {
+		return fmt.Errorf("Gov HotStuff 증거의 뷰와 QC 뷰가 다릅니다")
+	}
+	if proof.PrepareQC.Leader != proof.PreCommitQC.Leader || proof.PreCommitQC.Leader != proof.CommitQC.Leader {
+		return fmt.Errorf("Gov QC 리더가 단계별로 다릅니다")
+	}
+	if !sameStringList(proof.PrepareQC.Participants, proof.PreCommitQC.Participants) ||
+		!sameStringList(proof.PreCommitQC.Participants, proof.CommitQC.Participants) {
+		return fmt.Errorf("Gov QC 참여자 스냅샷이 단계별로 다릅니다")
 	}
 	log.Printf("[HotStuff][Gov 검증] 블록 #%d의 3단계 QC가 모두 유효합니다. (뷰=%d, Commit 서명=%d)",
 		ub.Index, proof.CommitQC.View, len(proof.CommitQC.Signatures))

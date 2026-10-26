@@ -5,6 +5,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/asn1"
 	"encoding/hex"
@@ -41,8 +42,6 @@ func ensureKeyPair() {
 
 	putMeta("meta_hos_privkey", privPem)
 	putMeta("meta_hos_pubkey", pubPem)
-	log.Println("[ANCHOR][INIT] Generated private key : %s", privPem)
-	log.Println("[ANCHOR][INIT] Generated public key : %s", pubPem)
 	log.Println("[ANCHOR][INIT] Generated ECDSA key pair for Hos node")
 }
 
@@ -85,15 +84,17 @@ func submitAnchor(block LowerBlock) {
 	privPem, _ := getMeta("meta_hos_privkey")
 
 	ts := time.Unix(time.Now().Unix(), 0).Format(time.RFC3339)
-	sig := makeAnchorSignature(privPem, block.MerkleRoot, ts)
-
-	req := map[string]any{
-		"hos_id":   selfID(),
-		"hos_boot": self, // ex: "hos-boot:5000"
-		"root":     block.MerkleRoot,
-		"ts":       ts,
-		"sig":      sig,
+	req := GovAnchorSubmission{
+		HosID:          selfID(),
+		HosBoot:        self,
+		Root:           block.MerkleRoot,
+		Ts:             ts,
+		LowerHeight:    block.Index,
+		LowerBlockHash: block.BlockHash,
+		GovEndpoint:    govRepresentativeEndpoint(),
+		LeadershipTerm: uint64(block.Index),
 	}
+	req.Sig = makeAnchorSignature(privPem, hex.EncodeToString(govAnchorSubmissionDigest(req)), ts)
 
 	body, _ := json.Marshal(req)
 	govURL := "http://" + govBoot + "/addAnchor"
@@ -110,6 +111,15 @@ func submitAnchor(block LowerBlock) {
 	} else {
 		log.Printf("[ANCHOR][WARN] Gov rejected anchor (status=%d)", resp.StatusCode)
 	}
+}
+
+// 앵커와 대표 위임 정보를 하나의 서명 대상으로 묶는다.
+func govAnchorSubmissionDigest(req GovAnchorSubmission) []byte {
+	payload := fmt.Sprintf("HOS-POW-ANCHOR|v2|%s|%s|%s|%s|%d|%s|%s|%d",
+		req.HosID, req.HosBoot, req.Root, req.Ts, req.LowerHeight,
+		req.LowerBlockHash, req.GovEndpoint, req.LeadershipTerm)
+	sum := sha256.Sum256([]byte(payload))
+	return sum[:]
 }
 
 // 검색 응답 구조체
@@ -228,14 +238,26 @@ func verifyECDSA(pubPemStr string, hash []byte, sigHex string) bool {
 	if block == nil {
 		return false
 	}
-	pubInterface, _ := x509.ParsePKIXPublicKey(block.Bytes)
-	pub := pubInterface.(*ecdsa.PublicKey)
+	pubInterface, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		return false
+	}
+	pub, ok := pubInterface.(*ecdsa.PublicKey)
+	if !ok {
+		return false
+	}
 
-	sigBytes, _ := hex.DecodeString(sigHex)
+	sigBytes, err := hex.DecodeString(sigHex)
+	if err != nil {
+		return false
+	}
 
 	// [수정 포인트 4] DER 인코딩된 서명을 다시 R, S로 언마샬링
 	var sigStruct struct{ R, S *big.Int }
 	if _, err := asn1.Unmarshal(sigBytes, &sigStruct); err != nil {
+		return false
+	}
+	if sigStruct.R == nil || sigStruct.S == nil {
 		return false
 	}
 

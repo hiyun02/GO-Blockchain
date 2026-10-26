@@ -65,10 +65,12 @@ type HotStuffProof struct {
 
 type hotStuffProposal struct {
 	View         uint64             `json:"view"`
+	Round        uint64             `json:"round"`
 	Leader       string             `json:"leader"`
 	Block        LowerBlock         `json:"block"`
 	Participants []string           `json:"participants"`
 	Justify      *QuorumCertificate `json:"justify_qc,omitempty"`
+	Signature    string             `json:"signature"`
 }
 
 type hotStuffVote struct {
@@ -82,7 +84,7 @@ type hotStuffVote struct {
 type hotStuffQCEnvelope struct {
 	View         uint64              `json:"view"`
 	Leader       string              `json:"leader"`
-	Block        LowerBlock          `json:"block"`
+	BlockHash    string              `json:"block_hash"`
 	Certificates []QuorumCertificate `json:"certificates"`
 }
 
@@ -123,9 +125,11 @@ var (
 	lockedQC *QuorumCertificate
 	voted    = make(map[string]string)
 
-	activeMu      sync.Mutex
-	activeBlock   *LowerBlock
-	activeStarted time.Time
+	activeMu               sync.Mutex
+	activeBlock            *LowerBlock
+	activeViewStarted      time.Time
+	activeConsensusStarted time.Time
+	activeRound            uint64
 
 	hotStuffHTTPClient = &http.Client{Timeout: 3 * time.Second}
 )
@@ -188,22 +192,29 @@ func startConsensusWatcher() {
 	log.Printf("[HotStuff][감시기] 시작: 배치=%d건, 배치 대기=%s, 뷰 타임아웃=%s",
 		ConsensusBatchSize, ConsensusTimeout, ViewTimeout)
 	for range ticker.C {
-		if self != getBootAddr() {
-			continue
-		}
 		if consensusInProgress.Load() {
 			activeMu.Lock()
-			timedOut := activeBlock != nil && time.Since(activeStarted) >= ViewTimeout
+			timedOut := activeBlock != nil && time.Since(activeViewStarted) >= ViewTimeout
 			var retry LowerBlock
+			var round uint64
 			if timedOut {
 				retry = *activeBlock
-				activeStarted = time.Now()
+				activeRound++
+				round = activeRound
+				activeViewStarted = time.Now()
 			}
 			activeMu.Unlock()
 			if timedOut {
-				log.Printf("[HotStuff][페이스메이커] 뷰 %d 타임아웃(%s). 같은 블록을 새 뷰에서 재제안합니다.", currentView.Load(), ViewTimeout)
-				launchHotStuffView(retry, "뷰 타임아웃 재시도")
+				participants := consensusParticipants()
+				leader := hotStuffLeaderForRound(participants, getBootAddr(), round)
+				log.Printf("[HotStuff][페이스메이커] 뷰 %d 타임아웃(%s). 라운드 %d의 리더를 %s(으)로 교체합니다.", currentView.Load(), ViewTimeout, round, leader)
+				if self == leader {
+					launchHotStuffView(retry, "뷰 타임아웃 리더 교체")
+				}
 			}
+			continue
+		}
+		if self != getBootAddr() {
 			continue
 		}
 
@@ -227,7 +238,9 @@ func startConsensusWatcher() {
 		block := createProposedBlock(entries)
 		activeMu.Lock()
 		activeBlock = &block
-		activeStarted = time.Now()
+		activeConsensusStarted = time.Now()
+		activeViewStarted = activeConsensusStarted
+		activeRound = 0
 		activeMu.Unlock()
 		reason := "배치 대기시간 만료"
 		if fullBatch {
@@ -241,18 +254,37 @@ func startConsensusWatcher() {
 
 func launchHotStuffView(block LowerBlock, reason string) {
 	view := currentView.Add(1)
-	leader := self
-	proposer = leader
 	participants := consensusParticipants()
+	activeMu.Lock()
+	round := activeRound
+	activeMu.Unlock()
+	leader := hotStuffLeaderForRound(participants, getBootAddr(), round)
+	if self != leader {
+		return
+	}
+	proposer = leader
 	justify := highestQCCopy()
 	state := getOrCreateHotStuffState(view, leader, block, participants)
-	state.StartedAt = time.Now()
 	activeMu.Lock()
+	if activeBlock == nil || activeBlock.BlockHash != block.BlockHash || activeConsensusStarted.IsZero() {
+		activeConsensusStarted = time.Now()
+	}
 	activeBlock = &block
-	activeStarted = time.Now()
+	activeViewStarted = time.Now()
+	state.StartedAt = activeConsensusStarted
 	activeMu.Unlock()
 
-	proposal := hotStuffProposal{View: view, Leader: leader, Block: block, Participants: participants, Justify: justify}
+	proposal := hotStuffProposal{View: view, Round: round, Leader: leader, Block: block, Participants: participants, Justify: justify}
+	privateKey, ok := getMeta("meta_hos_privkey")
+	if !ok {
+		log.Printf("[HotStuff][PROPOSE 오류] 리더 개인키가 없습니다")
+		return
+	}
+	proposal.Signature = makeAnchorSignature(privateKey, hex.EncodeToString(hotStuffProposalDigest(proposal)), "")
+	if proposal.Signature == "" {
+		log.Printf("[HotStuff][PROPOSE 오류] 리더 제안 서명 생성에 실패했습니다")
+		return
+	}
 	justifyText := "없음(제네시스 직후)"
 	if justify != nil {
 		justifyText = fmt.Sprintf("뷰=%d/%s/%s", justify.View, justify.Phase, shortHash(justify.BlockHash))
@@ -279,6 +311,14 @@ func handleHotStuffProposal(w http.ResponseWriter, r *http.Request) {
 	}
 	advanceCurrentView(proposal.View)
 	state := getOrCreateHotStuffState(proposal.View, proposal.Leader, proposal.Block, proposal.Participants)
+	activeMu.Lock()
+	if activeBlock == nil || activeBlock.BlockHash != proposal.Block.BlockHash || activeConsensusStarted.IsZero() {
+		activeConsensusStarted = time.Now()
+	}
+	activeViewStarted = time.Now()
+	activeRound = proposal.Round
+	state.StartedAt = activeConsensusStarted
+	activeMu.Unlock()
 	state.mu.Lock()
 	if state.Block.BlockHash != proposal.Block.BlockHash || state.Leader != proposal.Leader {
 		state.mu.Unlock()
@@ -291,7 +331,6 @@ func handleHotStuffProposal(w http.ResponseWriter, r *http.Request) {
 	activeMu.Lock()
 	copyBlock := proposal.Block
 	activeBlock = &copyBlock
-	activeStarted = time.Now()
 	activeMu.Unlock()
 	log.Printf("[HotStuff][PREPARE] 뷰=%d 제안 검증 성공: 블록=%s, 이전해시=%s. Prepare 투표를 전송합니다.",
 		proposal.View, shortHash(proposal.Block.BlockHash), shortHash(proposal.Block.PrevHash))
@@ -304,14 +343,19 @@ func handleHotStuffProposal(w http.ResponseWriter, r *http.Request) {
 }
 
 func validateProposal(proposal hotStuffProposal) error {
-	if proposal.View == 0 || proposal.Leader == "" || proposal.Block.BlockHash == "" {
+	if proposal.View == 0 || proposal.Leader == "" || proposal.Block.BlockHash == "" || proposal.Signature == "" {
 		return fmt.Errorf("필수 제안 필드가 비어 있습니다")
 	}
-	if proposal.Leader != getBootAddr() {
-		return fmt.Errorf("현재 리더(%s)가 아닌 노드의 제안입니다: %s", getBootAddr(), proposal.Leader)
+	expectedLeader := hotStuffLeaderForRound(proposal.Participants, getBootAddr(), proposal.Round)
+	if proposal.Leader != expectedLeader {
+		return fmt.Errorf("라운드 %d의 예상 리더(%s)와 제안자가 다릅니다: %s", proposal.Round, expectedLeader, proposal.Leader)
 	}
 	if !isSortedUnique(proposal.Participants) || !containsString(proposal.Participants, proposal.Leader) || !containsString(proposal.Participants, self) {
 		return fmt.Errorf("참여자 스냅샷이 유효하지 않습니다")
+	}
+	publicKey, ok := publicKeyFor(proposal.Leader)
+	if !ok || !verifyECDSA(publicKey, hotStuffProposalDigest(proposal), proposal.Signature) {
+		return fmt.Errorf("HotStuff 리더 제안 서명이 유효하지 않습니다")
 	}
 	height, ok := getLatestHeight()
 	if !ok || height < 0 {
@@ -356,16 +400,31 @@ func handleHotStuffVote(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "투표 대상 또는 리더 정보가 일치하지 않습니다", http.StatusBadRequest)
 		return
 	}
-	collector, phaseOK := state.Collectors[vote.Phase]
+	_, phaseOK := state.Collectors[vote.Phase]
 	if !phaseOK {
 		state.mu.Unlock()
 		http.Error(w, "지원하지 않는 투표 단계입니다", http.StatusBadRequest)
 		return
 	}
-	if !verifyHotStuffVote(vote, state) {
-		state.mu.Unlock()
+	leader := state.Leader
+	participants := append([]string(nil), state.Participants...)
+	state.mu.Unlock()
+	if !verifyHotStuffVote(vote, leader, participants) {
 		log.Printf("[HotStuff][투표 거부] 뷰=%d 단계=%s 서명자=%s: ECDSA 검증 실패", vote.View, vote.Phase, vote.Voter)
 		http.Error(w, "투표 서명이 유효하지 않습니다", http.StatusForbidden)
+		return
+	}
+	state.mu.Lock()
+	if self != state.Leader || vote.BlockHash != state.Block.BlockHash || state.Leader != leader ||
+		!sameStringList(state.Participants, participants) || !containsString(state.Participants, vote.Voter) {
+		state.mu.Unlock()
+		http.Error(w, "서명 검증 중 뷰 상태가 변경되었습니다", http.StatusConflict)
+		return
+	}
+	collector, phaseOK := state.Collectors[vote.Phase]
+	if !phaseOK {
+		state.mu.Unlock()
+		http.Error(w, "지원하지 않는 투표 단계입니다", http.StatusBadRequest)
 		return
 	}
 	if !collector.add(vote.Voter, vote.Signature) {
@@ -389,13 +448,13 @@ func handleHotStuffVote(w http.ResponseWriter, r *http.Request) {
 	qc := buildQC(state, vote.Phase, collector.votes)
 	state.QCs[vote.Phase] = qc
 	certificates := certificateChain(state)
-	block := state.Block
-	participants := append([]string(nil), state.Participants...)
+	participants = append([]string(nil), state.Participants...)
 	state.mu.Unlock()
 
 	log.Printf("[HotStuff][%s QC 형성] 뷰=%d, 블록=%s, 유효 서명=%d/%d. 다음 단계로 전파합니다.",
 		vote.Phase, vote.View, shortHash(vote.BlockHash), len(qc.Signatures), required)
-	envelope := hotStuffQCEnvelope{View: vote.View, Leader: self, Block: block, Certificates: certificates}
+	// 이전 메시지를 놓친 노드가 따라잡을 수 있도록 QC 체인은 전송하되, 수신 노드는 검증한 QC를 재검증하지 않는다.
+	envelope := hotStuffQCEnvelope{View: vote.View, Leader: self, BlockHash: vote.BlockHash, Certificates: certificates}
 	broadcastHotStuff("/hotstuff/qc", envelope, participants)
 	w.WriteHeader(http.StatusCreated)
 }
@@ -420,27 +479,29 @@ func handleHotStuffQC(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	state.mu.Lock()
-	if envelope.Leader != state.Leader || envelope.Block.BlockHash != state.Block.BlockHash {
+	if envelope.Leader != state.Leader || envelope.BlockHash != state.Block.BlockHash {
 		state.mu.Unlock()
 		http.Error(w, "QC의 리더 또는 블록이 제안과 다릅니다", http.StatusBadRequest)
 		return
 	}
-	for _, qc := range envelope.Certificates {
+	var lastQC QuorumCertificate
+	for _, receivedQC := range envelope.Certificates {
+		qc := receivedQC
 		if qc.View != envelope.View || qc.BlockHash != state.Block.BlockHash {
 			state.mu.Unlock()
 			http.Error(w, "QC 뷰 또는 블록 해시가 일치하지 않습니다", http.StatusBadRequest)
 			return
 		}
-		if err := verifyQuorumCertificate(qc); err != nil {
+		trustedQC, err := acceptViewQC(state, qc)
+		if err != nil {
 			state.mu.Unlock()
 			log.Printf("[HotStuff][QC 거부] 뷰=%d 단계=%s: %v", qc.View, qc.Phase, err)
 			http.Error(w, err.Error(), http.StatusForbidden)
 			return
 		}
-		state.QCs[qc.Phase] = qc
-		updateHighestQC(qc)
+		lastQC = trustedQC
+		updateHighestQC(trustedQC)
 	}
-	lastQC := envelope.Certificates[len(envelope.Certificates)-1]
 	if lastQC.Phase == PhasePreCommit {
 		updateLockedQC(lastQC)
 	}
@@ -467,7 +528,7 @@ func handleHotStuffQC(w http.ResponseWriter, r *http.Request) {
 
 		log.Printf("[HotStuff][DECIDE] 뷰=%d의 Commit QC 검증 완료. 블록 #%d을(를) 최종 확정합니다. (해시=%s, 지연=%.4f초)",
 			lastQC.View, finalBlock.Index, shortHash(finalBlock.BlockHash), finalBlock.Elapsed)
-		if err := onBlockReceived(finalBlock); err != nil {
+		if err := onVerifiedBlockReceived(finalBlock); err != nil {
 			log.Printf("[HotStuff][DECIDE 오류] 확정 블록 저장 실패: %v", err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -574,10 +635,59 @@ func verifyQuorumCertificate(qc QuorumCertificate) error {
 	return nil
 }
 
-func verifyHotStuffVote(vote hotStuffVote, state *hotStuffViewState) bool {
+// acceptViewQC는 뷰에서 처음 수신한 QC만 서명 검증하고, 이미 검증한 QC는 보관본을 재사용한다.
+// 이전 단계 QC가 없는 상태에서 다음 단계 QC를 먼저 받아들이지 않도록 단계 순서도 함께 확인한다.
+func acceptViewQC(state *hotStuffViewState, qc QuorumCertificate) (QuorumCertificate, error) {
+	if qc.View != state.View || qc.BlockHash != state.Block.BlockHash {
+		return QuorumCertificate{}, fmt.Errorf("QC 뷰 또는 블록 해시가 현재 제안과 다릅니다")
+	}
+	if qc.Leader != state.Leader || !sameStringList(qc.Participants, state.Participants) {
+		return QuorumCertificate{}, fmt.Errorf("QC 리더 또는 참여자 스냅샷이 제안과 다릅니다")
+	}
+	if stored, ok := state.QCs[qc.Phase]; ok {
+		if stored.View != qc.View || stored.BlockHash != qc.BlockHash || stored.Leader != qc.Leader ||
+			!sameStringList(stored.Participants, qc.Participants) {
+			return QuorumCertificate{}, fmt.Errorf("이미 검증한 %s QC와 수신 QC가 다릅니다", qc.Phase)
+		}
+		return stored, nil
+	}
+	if qc.Phase == PhasePreCommit {
+		if _, ok := state.QCs[PhasePrepare]; !ok {
+			return QuorumCertificate{}, fmt.Errorf("Prepare QC보다 Pre-Commit QC가 먼저 도착했습니다")
+		}
+	}
+	if qc.Phase == PhaseCommit {
+		if _, ok := state.QCs[PhasePrepare]; !ok {
+			return QuorumCertificate{}, fmt.Errorf("Prepare QC 없이 Commit QC를 처리할 수 없습니다")
+		}
+		if _, ok := state.QCs[PhasePreCommit]; !ok {
+			return QuorumCertificate{}, fmt.Errorf("Pre-Commit QC 없이 Commit QC를 처리할 수 없습니다")
+		}
+	}
+	if err := verifyQuorumCertificate(qc); err != nil {
+		return QuorumCertificate{}, err
+	}
+	state.QCs[qc.Phase] = qc
+	return qc, nil
+}
+
+func verifyHotStuffVote(vote hotStuffVote, leader string, participants []string) bool {
 	publicKey, ok := publicKeyFor(vote.Voter)
 	return ok && verifyECDSA(publicKey,
-		hotStuffVoteDigest(vote.View, vote.Phase, vote.BlockHash, state.Leader, state.Participants), vote.Signature)
+		hotStuffVoteDigest(vote.View, vote.Phase, vote.BlockHash, leader, participants), vote.Signature)
+}
+
+func hotStuffProposalDigest(proposal hotStuffProposal) []byte {
+	chainID := proposal.Block.HosID
+	membership := sha256.Sum256([]byte(strings.Join(proposal.Participants, "\x00")))
+	justify := ""
+	if proposal.Justify != nil {
+		justify = fmt.Sprintf("%d|%s|%s", proposal.Justify.View, proposal.Justify.Phase, proposal.Justify.BlockHash)
+	}
+	payload := fmt.Sprintf("HOTSTUFF-PROPOSAL|v1|%s|%d|%d|%s|%s|%x|%s",
+		chainID, proposal.View, proposal.Round, proposal.Block.BlockHash, proposal.Leader, membership, justify)
+	sum := sha256.Sum256([]byte(payload))
+	return sum[:]
 }
 
 func hotStuffVoteDigest(view uint64, phase HotStuffPhase, blockHash, leader string, participants []string) []byte {
@@ -648,7 +758,9 @@ func finishHotStuffConsensus(block LowerBlock) {
 	consensusInProgress.Store(false)
 	activeMu.Lock()
 	activeBlock = nil
-	activeStarted = time.Time{}
+	activeViewStarted = time.Time{}
+	activeConsensusStarted = time.Time{}
+	activeRound = 0
 	activeMu.Unlock()
 	if block.HotStuff != nil {
 		updateHighestQC(block.HotStuff.CommitQC)
@@ -678,12 +790,35 @@ func consensusParticipants() []string {
 	return participants
 }
 
+func hotStuffLeaderForRound(participants []string, initialLeader string, round uint64) string {
+	if len(participants) == 0 {
+		return ""
+	}
+	start := sort.SearchStrings(participants, initialLeader)
+	if start >= len(participants) || participants[start] != initialLeader {
+		start = 0
+	}
+	return participants[(start+int(round%uint64(len(participants))))%len(participants)]
+}
+
 func quorumSizeFor(n int) int {
 	if n <= 0 {
 		return 0
 	}
 	f := (n - 1) / 3
 	return n - f
+}
+
+func sameStringList(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func certificateChain(state *hotStuffViewState) []QuorumCertificate {

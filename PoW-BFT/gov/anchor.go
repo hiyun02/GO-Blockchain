@@ -1,16 +1,10 @@
 package main
 
 import (
-	"crypto/ecdsa"
-	"crypto/x509"
-	"encoding/asn1"
-	"encoding/hex"
 	"encoding/json"
-	"encoding/pem"
 	"fmt"
 	"io"
 	"log"
-	"math/big"
 	"net/http"
 	"net/url"
 )
@@ -18,13 +12,7 @@ import (
 // Gov에서 Hos가 제출한 앵커를 수신하고 검증한 후 pending 추가함수 호출(부트노드만 수행)
 // Gov에서 Hos가 제출한 앵커를 수신하고 검증한 후 pending 추가 (상위 체인용 최종 수정본)
 func addAnchor(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		HosID   string `json:"hos_id"`
-		HosBoot string `json:"hos_boot"`
-		Root    string `json:"root"`
-		Ts      string `json:"ts"`
-		Sig     string `json:"sig"`
-	}
+	var req GovAnchorSubmission
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid JSON", 400)
 		return
@@ -46,65 +34,22 @@ func addAnchor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 2. ECDSA 공개키 파싱 (하위 체인과 규격 일치)
-	block, _ := pem.Decode(pubPem)
-	if block == nil {
-		log.Printf("[ANCHOR][ERROR] failed to decode PEM for %s", req.HosID)
-		http.Error(w, "invalid public key pem", 400)
-		return
-	}
-	pubIfc, err := x509.ParsePKIXPublicKey(block.Bytes)
+	// 앵커와 대표 위임을 함께 검증하여 서로 다른 요청으로 바뀌지 않도록 한다.
+	representative, err := buildPoWRepresentativeChange(req, string(pubPem))
 	if err != nil {
-		log.Printf("[ANCHOR][ERROR] failed to parse PKIX for %s: %v", req.HosID, err)
-		http.Error(w, "invalid public key format", 400)
-		return
-	}
-	pubKey, ok := pubIfc.(*ecdsa.PublicKey)
-	if !ok {
-		http.Error(w, "not an ecdsa public key", 400)
+		log.Printf("[ANCHOR][INVALID] %s: %v", req.HosID, err)
+		http.Error(w, err.Error(), http.StatusForbidden)
 		return
 	}
 
-	// 3. 서명 검증을 위한 데이터 처리 (하위체인의 makeAnchorSignature 규격과 일치)
-	// 하부체인에서는 MerkleRoot(Hex문자열)를 DecodeString하여 나온 바이트 그대로 서명함
-	hash, err := hex.DecodeString(req.Root)
-	if err != nil {
-		log.Printf("[ANCHOR][ERROR] Invalid Root hex from %s: %v", req.HosID, err)
-		http.Error(w, "invalid root format", 400)
-		return
-	}
-
-	// 4. DER 디코딩 및 검증
-	sigBytes, err := hex.DecodeString(req.Sig)
-	if err != nil {
-		http.Error(w, "invalid hex signature", 400)
-		return
-	}
-
-	var sigStruct struct {
-		R, S *big.Int
-	}
-	if _, err := asn1.Unmarshal(sigBytes, &sigStruct); err != nil {
-		log.Printf("[ANCHOR][ERROR] ASN1 Unmarshal fail for %s: %v", req.HosID, err)
-		http.Error(w, "invalid signature format", 403)
-		return
-	}
-
-	// [중요] 하위체인에서 이미 해시된 데이터를 서명했으므로, 추가 해싱(sha256.Sum256) 없이 직접 검증
-	if !ecdsa.Verify(pubKey, hash, sigStruct.R, sigStruct.S) {
-		log.Printf("[ANCHOR][INVALID] Signature verification failed from %s", req.HosID)
-		log.Printf("[DEBUG] Verify Fail - Root: %s, Sig: %s...", req.Root, req.Sig[:10])
-		http.Error(w, "invalid signature", 403)
-		return
-	}
-
-	// 5. AnchorRecord 구성 및 저장
+	// 검증된 대표 변경은 이 앵커를 담은 상위 블록이 확정된 뒤부터 적용된다.
 	ar := AnchorRecord{
 		HosID:            req.HosID,
 		ContractSnapshot: ContractData{},
 		LowerRoot:        req.Root,
 		AccessCatalog:    []string{},
 		AnchorTimestamp:  req.Ts,
+		Representative:   representative,
 	}
 
 	appendPending([]AnchorRecord{ar})
@@ -123,7 +68,11 @@ func addAnchor(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[ANCHOR] New HosBoot addr detected %s : %s", req.HosID, req.HosBoot)
 		broadcastNewHosBoot(req.HosID, req.HosBoot)
 	}
-	w.WriteHeader(http.StatusOK)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":                "pending",
+		"representative_change": representative.Action,
+		"activation":            "next_gov_block_after_registration",
+	})
 }
 
 // Hos가 반환하는 검색 응답 구조체

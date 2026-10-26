@@ -33,6 +33,9 @@ func main() {
 		log.Fatal("[START] chain init error: ", err)
 	}
 	log.Printf("[START] UpperChain ready (gov_id=%s)\n", govID)
+	if err := loadPoWRepresentativesAtBoot(); err != nil {
+		log.Fatal("[START] representative state init error: ", err)
+	}
 
 	// 4) HTTP 라우팅 등록
 	mux := http.NewServeMux()
@@ -53,6 +56,7 @@ func main() {
 	mux.HandleFunc("/bootNotify", bootNotify)
 	mux.HandleFunc("/addAnchor", addAnchor)
 	mux.HandleFunc("/hosBootNotify", hosBootNotify)
+	mux.HandleFunc("/consensus/miners", handleConsensusMiners)
 
 	mux.Handle("/", http.FileServer(http.Dir("./static")))
 

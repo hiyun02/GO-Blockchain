@@ -55,6 +55,9 @@ func main() {
 	mux.HandleFunc("/getPublicKey", getPublicKey)
 	mux.HandleFunc("/chgGovBoot", chgGovBoot)
 	mux.HandleFunc("/govBootNotify", govBootNotify)
+	mux.HandleFunc("/gov/mine/start", handleGovRepresentativeMineStart)
+	mux.HandleFunc("/gov/receiveBlock", handleGovRepresentativeReceiveBlock)
+	mux.HandleFunc("/gov/status", handleGovRepresentativeStatus)
 
 	mux.Handle("/", http.FileServer(http.Dir("./static")))
 

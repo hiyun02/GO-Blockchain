@@ -41,8 +41,27 @@ func probeStatus(addr string) (nodeStatus, bool) {
 // - 순서: index 증가, prevHash 일치
 // - 머클루트/블록해시 재계산 일치
 // - hos_id 일치(제네시스와 동일 체인인지 확인)
+// - PBFT 합의 정족수와 개별 서명 유효성 확인
 // -----------------------------------------------------------------------------
 func validateLowerBlock(newBlk, prevBlk LowerBlock) error {
+	if err := validateLowerBlockStructure(newBlk, prevBlk); err != nil {
+		return err
+	}
+	// PBFT 합의 증거 검증
+	if err := verifyConsensusEvidence(newBlk); err != nil {
+		return fmt.Errorf("invalid consensus evidence: %w", err)
+	}
+	return nil
+}
+
+// validateLowerBlockStructure는 합의 중에도 사용할 수 있도록 블록 구조만 검증한다.
+func validateLowerBlockStructure(newBlk, prevBlk LowerBlock) error {
+	if newBlk.ConsensusVersion != 0 && newBlk.ConsensusVersion != PBFTConsensusVersion {
+		return fmt.Errorf("unsupported consensus version: %d", newBlk.ConsensusVersion)
+	}
+	if prevBlk.ConsensusVersion >= PBFTConsensusVersion && newBlk.ConsensusVersion < PBFTConsensusVersion {
+		return fmt.Errorf("consensus version downgrade: prev=%d new=%d", prevBlk.ConsensusVersion, newBlk.ConsensusVersion)
+	}
 	// 1) 인덱스 연속성
 	if prevBlk.Index+1 != newBlk.Index {
 		return fmt.Errorf("index not consecutive: prev=%d new=%d", prevBlk.Index, newBlk.Index)

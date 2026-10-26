@@ -2,10 +2,15 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"io"
 	"log"
 	"net/http"
+	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -13,18 +18,20 @@ import (
 
 var consensusInProgress atomic.Bool
 
+var pbftHTTPClient = &http.Client{Timeout: 3 * time.Second}
+
 const (
 	PhaseIdle int32 = iota
 	PhasePrePrepare
 	PhasePrepare
 	PhaseCommit
 	PhaseFinal
-	ConsensusBatchSize = 200
-	ConsensusTimeout   = 10
+	ConsensusBatchSize  = 200
+	ConsensusTimeout    = 10
+	PBFTProgressTimeout = 4 * time.Second
 )
 
 type voteCollector struct {
-	mu    sync.Mutex
 	votes map[string]string
 }
 
@@ -33,8 +40,6 @@ func newCollector() *voteCollector {
 }
 
 func (c *voteCollector) add(addr, sig string) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	if _, exists := c.votes[addr]; exists {
 		return false
 	}
@@ -43,28 +48,51 @@ func (c *voteCollector) add(addr, sig string) bool {
 }
 
 func (c *voteCollector) count() int {
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	return len(c.votes)
 }
 
-func (c *voteCollector) all() []string {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	sigs := make([]string, 0, len(c.votes))
-	for _, s := range c.votes {
-		sigs = append(sigs, s)
+func (c *voteCollector) signedVotes() []PBFTSignature {
+	voters := make([]string, 0, len(c.votes))
+	for voter := range c.votes {
+		voters = append(voters, voter)
 	}
-	return sigs
+	sort.Strings(voters)
+	votes := make([]PBFTSignature, 0, len(voters))
+	for _, voter := range voters {
+		votes = append(votes, PBFTSignature{Voter: voter, Signature: c.votes[voter]})
+	}
+	return votes
 }
 
 type viewState struct {
-	mu        sync.Mutex
-	Phase     int32
-	Block     LowerBlock
-	Prepare   *voteCollector
-	Commit    *voteCollector
-	Finalized bool
+	mu             sync.Mutex
+	Phase          int32
+	Block          LowerBlock
+	Prepare        *voteCollector
+	Commit         *voteCollector
+	Leader         string
+	Participants   []string
+	StartedAt      time.Time
+	LastProgress   time.Time
+	Proposal       bftStartMessage
+	PendingPrepare []bftVoteMessage
+	PendingCommit  []bftVoteMessage
+	Finalized      bool
+}
+
+type bftStartMessage struct {
+	View         int        `json:"view"`
+	Block        LowerBlock `json:"block"`
+	Leader       string     `json:"leader"`
+	Participants []string   `json:"participants"`
+	Signature    string     `json:"signature"`
+}
+
+type bftVoteMessage struct {
+	View int    `json:"view"`
+	Addr string `json:"addr"`
+	Sig  string `json:"sig"`
+	Hash string `json:"hash"`
 }
 
 var (
@@ -89,10 +117,94 @@ func deleteView(view int) {
 	delete(viewStates, view)
 }
 
-func quorumSize() int {
-	n := len(peersSnapshot()) + 1
+// 고정된 합의 참여 노드 수를 기준으로 BFT 정족수 계산
+// n >= 3f+1, f=floor((n-1)/3) 조건에서 n-f를 사용하면
+// 서로 다른 두 정족수는 최소 f+1개의 노드를 공유함
+func quorumSizeFor(n int) int {
+	if n <= 0 {
+		return 0
+	}
 	f := (n - 1) / 3
-	return 2*f + 1
+	return n - f
+}
+
+func consensusParticipants() []string {
+	set := map[string]struct{}{self: {}}
+	for _, peer := range peersSnapshot() {
+		if peer != "" {
+			set[peer] = struct{}{}
+		}
+	}
+	participants := make([]string, 0, len(set))
+	for participant := range set {
+		participants = append(participants, participant)
+	}
+	sort.Strings(participants)
+	return participants
+}
+
+func sameStringList(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func isSortedUnique(items []string) bool {
+	if len(items) == 0 {
+		return false
+	}
+	for i := 1; i < len(items); i++ {
+		if items[i-1] >= items[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func containsParticipant(participants []string, participant string) bool {
+	index := sort.SearchStrings(participants, participant)
+	return index < len(participants) && participants[index] == participant
+}
+
+func pbftVoteDigest(hosID string, view int, phase int32, blockHash, leader string, participants []string) []byte {
+	membership := sha256.Sum256([]byte(strings.Join(participants, "\x00")))
+	payload := fmt.Sprintf("PBFT|v1|%s|%d|%d|%s|%s|%x", hosID, view, phase, blockHash, leader, membership)
+	sum := sha256.Sum256([]byte(payload))
+	return sum[:]
+}
+
+func signPBFTVote(privateKey string, hosID string, view int, phase int32, blockHash, leader string, participants []string) string {
+	digest := pbftVoteDigest(hosID, view, phase, blockHash, leader, participants)
+	return makeAnchorSignature(privateKey, hex.EncodeToString(digest), "")
+}
+
+func pbftPublicKeyFor(address string) (string, bool) {
+	if address == self {
+		return getMeta("meta_hos_pubkey")
+	}
+	pkMu.RLock()
+	defer pkMu.RUnlock()
+	key, ok := peerPubKeys[address]
+	return key, ok && key != ""
+}
+
+func verifyPBFTVote(vote bftVoteMessage, phase int32, block LowerBlock, leader string, participants []string) bool {
+	if vote.View != block.Index || vote.Hash != block.BlockHash ||
+		!containsParticipant(participants, vote.Addr) {
+		return false
+	}
+	publicKey, ok := pbftPublicKeyFor(vote.Addr)
+	if !ok {
+		return false
+	}
+	digest := pbftVoteDigest(block.HosID, vote.View, phase, vote.Hash, leader, participants)
+	return verifyECDSA(publicKey, digest, vote.Sig)
 }
 
 func startConsensusWatcher() {
@@ -100,7 +212,11 @@ func startConsensusWatcher() {
 	var lastConsensusTime time.Time // 초기화를 하지 않음
 
 	for range ticker.C {
-		if self != boot || consensusInProgress.Load() {
+		if self != boot {
+			continue
+		}
+		if consensusInProgress.Load() {
+			retryPBFTConsensus()
 			continue
 		}
 
@@ -147,7 +263,12 @@ func startConsensusWatcher() {
 
 		// 제안 블록 생성 및 상태 전이
 		block := createProposedBlock(records)
+		participants := consensusParticipants()
 		vs.Block = block
+		vs.Leader = self
+		vs.Participants = append([]string(nil), participants...)
+		vs.StartedAt = time.Now()
+		vs.LastProgress = vs.StartedAt
 		vs.Phase = PhasePrePrepare
 		vs.mu.Unlock()
 
@@ -161,8 +282,21 @@ func startConsensusWatcher() {
 			timeSinceLastConsensus.Seconds(),
 		)
 
-		// 합의 시작 신호 브로드캐스트
-		broadcast("/bft/start", map[string]any{"view": view, "block": block})
+		// Pre-Prepare도 서명하여 리더가 만든 제안인지 검증할 수 있게 한다.
+		privateKey, ok := getMeta("meta_hos_privkey")
+		if !ok {
+			log.Printf("[PBFT][시작 오류] 리더 개인키가 없습니다")
+			consensusInProgress.Store(false)
+			continue
+		}
+		proposal := bftStartMessage{
+			View: view, Block: block, Leader: self, Participants: participants,
+			Signature: signPBFTVote(privateKey, block.HosID, view, PhasePrePrepare, block.BlockHash, self, participants),
+		}
+		vs.mu.Lock()
+		vs.Proposal = proposal
+		vs.mu.Unlock()
+		broadcast("/bft/start", proposal, participants)
 
 		// 마지막 합의 시간 갱신 (반드시 루프 마지막이나 시작 시점에 갱신 확인)
 		lastConsensusTime = time.Now()
@@ -170,174 +304,291 @@ func startConsensusWatcher() {
 }
 
 func handleBftStart(w http.ResponseWriter, r *http.Request) {
-	var msg struct {
-		View  int        `json:"view"`
-		Block LowerBlock `json:"block"`
-	}
+	var msg bftStartMessage
 	if err := json.NewDecoder(r.Body).Decode(&msg); err != nil {
+		http.Error(w, "Pre-Prepare JSON 형식이 올바르지 않습니다", http.StatusBadRequest)
+		return
+	}
+	if err := validateBFTStart(msg); err != nil {
+		log.Printf("[PBFT][PRE-PREPARE 거부] 뷰=%d: %v", msg.View, err)
+		http.Error(w, err.Error(), http.StatusForbidden)
 		return
 	}
 
 	vs := getOrCreateView(msg.View)
 	vs.mu.Lock()
-	defer vs.mu.Unlock()
-
-	if vs.Phase != PhaseIdle {
+	if vs.Phase != PhaseIdle && (vs.Block.BlockHash != msg.Block.BlockHash || vs.Leader != msg.Leader ||
+		!sameStringList(vs.Participants, msg.Participants)) {
+		vs.mu.Unlock()
+		http.Error(w, "현재 뷰의 제안과 다른 Pre-Prepare입니다", http.StatusConflict)
+		return
+	}
+	if vs.Phase != PhaseIdle && vs.Phase != PhasePrePrepare {
+		phase := vs.Phase
+		prepareSig := vs.Prepare.votes[self]
+		commitSig := vs.Commit.votes[self]
+		participants := append([]string(nil), vs.Participants...)
+		blockHash := vs.Block.BlockHash
+		vs.mu.Unlock()
+		if phase == PhasePrepare && prepareSig != "" {
+			broadcast("/bft/prepare", bftVoteMessage{View: msg.View, Addr: self, Sig: prepareSig, Hash: blockHash}, participants)
+		}
+		if phase >= PhaseCommit && commitSig != "" {
+			broadcast("/bft/commit", bftVoteMessage{View: msg.View, Addr: self, Sig: commitSig, Hash: blockHash}, participants)
+		}
+		w.WriteHeader(http.StatusAccepted)
 		return
 	}
 
-	// 블록 검증 로직 (필요시 추가)
 	vs.Block = msg.Block
+	vs.Leader = msg.Leader
+	vs.Participants = append([]string(nil), msg.Participants...)
+	vs.Proposal = msg
+	if vs.StartedAt.IsZero() {
+		vs.StartedAt = time.Now()
+	}
 	vs.Phase = PhasePrepare
+	vs.LastProgress = time.Now()
 
-	myPriv, _ := getMeta("meta_hos_privkey")
-	sig := makeAnchorSignature(myPriv, vs.Block.BlockHash, "")
+	myPriv, ok := getMeta("meta_hos_privkey")
+	if !ok {
+		vs.mu.Unlock()
+		http.Error(w, "노드 개인키가 없습니다", http.StatusInternalServerError)
+		return
+	}
+	sig := signPBFTVote(myPriv, vs.Block.HosID, msg.View, PhasePrepare, vs.Block.BlockHash, vs.Leader, vs.Participants)
 	vs.Prepare.add(self, sig)
+	pendingPrepare := append([]bftVoteMessage(nil), vs.PendingPrepare...)
+	pendingCommit := append([]bftVoteMessage(nil), vs.PendingCommit...)
+	vs.PendingPrepare = nil
+	vs.PendingCommit = nil
+	participants := append([]string(nil), vs.Participants...)
+	blockHash := vs.Block.BlockHash
+	vs.mu.Unlock()
 
 	log.Printf("[PBFT][PREPARE] Send Prepare for View %d", msg.View)
-	broadcast("/bft/prepare", map[string]any{
-		"view": msg.View,
-		"addr": self,
-		"sig":  sig,
-		"hash": vs.Block.BlockHash,
-	})
+	broadcast("/bft/prepare", bftVoteMessage{View: msg.View, Addr: self, Sig: sig, Hash: blockHash}, participants)
+	processBufferedPBFTVotes(vs, msg.View, pendingPrepare, pendingCommit)
+}
+
+func validateBFTStart(msg bftStartMessage) error {
+	if msg.View <= 0 || msg.Leader == "" || msg.Block.BlockHash == "" || msg.Signature == "" {
+		return fmt.Errorf("Pre-Prepare 필수 정보가 비어 있습니다")
+	}
+	if msg.Block.ConsensusVersion != PBFTConsensusVersion {
+		return fmt.Errorf("새 PBFT 제안은 합의 버전 %d이어야 합니다", PBFTConsensusVersion)
+	}
+	if msg.Leader != boot || msg.Block.Proposer != msg.Leader || msg.Block.Index != msg.View {
+		return fmt.Errorf("Pre-Prepare 리더, 제안자 또는 뷰가 올바르지 않습니다")
+	}
+	if !isSortedUnique(msg.Participants) || !containsParticipant(msg.Participants, msg.Leader) ||
+		!containsParticipant(msg.Participants, self) {
+		return fmt.Errorf("Pre-Prepare 참여자 스냅샷이 올바르지 않습니다")
+	}
+	if !sameStringList(msg.Participants, consensusParticipants()) {
+		return fmt.Errorf("Pre-Prepare 참여자 스냅샷이 현재 검증자 집합과 다릅니다")
+	}
+	chainMu.Lock()
+	previous, err := getBlockByIndex(msg.Block.Index - 1)
+	if err == nil {
+		err = validateLowerBlockStructure(msg.Block, previous)
+	}
+	chainMu.Unlock()
+	if err != nil {
+		return fmt.Errorf("제안 블록 구조 검증 실패: %w", err)
+	}
+	publicKey, ok := pbftPublicKeyFor(msg.Leader)
+	if !ok {
+		return fmt.Errorf("PBFT 리더 공개키를 찾을 수 없습니다")
+	}
+	digest := pbftVoteDigest(msg.Block.HosID, msg.View, PhasePrePrepare, msg.Block.BlockHash, msg.Leader, msg.Participants)
+	if !verifyECDSA(publicKey, digest, msg.Signature) {
+		return fmt.Errorf("Pre-Prepare 리더 서명이 유효하지 않습니다")
+	}
+	return nil
 }
 
 func handleReceivePrepare(w http.ResponseWriter, r *http.Request) {
-	var msg struct {
-		View int
-		Addr string
-		Sig  string
-		Hash string
-	}
+	var msg bftVoteMessage
 	if err := json.NewDecoder(r.Body).Decode(&msg); err != nil {
 		return
 	}
 
-	vs := getOrCreateView(msg.View)
-	vs.mu.Lock()
-
-	// 블록 정보가 아직 도착 안 했으면 최대 3번(30ms)까지 재시도
-	if vs.Block.BlockHash == "" {
-		log.Printf("[PBFT][PREPARE] Receive Prepare for View %d", msg.View)
-		for i := 0; i < 3; i++ {
-			vs.mu.Unlock()
-			time.Sleep(10 * time.Millisecond)
-			vs.mu.Lock()
-			if vs.Block.BlockHash != "" {
-				break
-			}
-		}
-	}
-	defer vs.mu.Unlock()
-
-	// 리더로부터 BftStart(Pre-Prepare)를 아예 못 받은 경우
-	if vs.Block.BlockHash == "" {
+	if err := processPBFTVote(msg, PhasePrepare); err != nil {
+		http.Error(w, err.Error(), http.StatusForbidden)
 		return
 	}
-
-	// 해시 미스매치 검사
-	if vs.Block.BlockHash != msg.Hash {
-		log.Printf("[DEBUG] Hash mismatch in Prepare: Expected %s, Got %s", vs.Block.BlockHash, msg.Hash)
-		return
-	}
-
-	var pub string
-	var ok bool
-	if msg.Addr == self {
-		pub, ok = getMeta("meta_hos_pubkey")
-	} else {
-		pub, ok = peerPubKeys[msg.Addr]
-	}
-
-	if !ok {
-		return
-	}
-	hashBytes, _ := hex.DecodeString(msg.Hash)
-	if !verifyECDSA(pub, hashBytes, msg.Sig) {
-		return
-	}
-
-	if !vs.Prepare.add(msg.Addr, msg.Sig) {
-		return
-	}
-
-	// 정족수 확인 후 Commit 단계 진입
-	if vs.Prepare.count() >= quorumSize() && vs.Phase == PhasePrepare {
-		vs.Phase = PhaseCommit
-		myPriv, _ := getMeta("meta_hos_privkey")
-
-		sig := makeAnchorSignature(myPriv, vs.Block.BlockHash, "")
-		vs.Commit.add(self, sig)
-
-		log.Printf("[PBFT][COMMIT] Quorum reached! Broadcast Commit for View %d", msg.View)
-		broadcast("/bft/commit", map[string]any{
-			"view": msg.View,
-			"addr": self,
-			"sig":  sig,
-			"hash": vs.Block.BlockHash,
-		})
-	}
+	w.WriteHeader(http.StatusAccepted)
 }
 
 func handleReceiveCommit(w http.ResponseWriter, r *http.Request) {
-	var msg struct {
-		View int
-		Addr string
-		Sig  string
-		Hash string
-	}
+	var msg bftVoteMessage
 	if err := json.NewDecoder(r.Body).Decode(&msg); err != nil {
 		return
 	}
 
+	if err := processPBFTVote(msg, PhaseCommit); err != nil {
+		http.Error(w, err.Error(), http.StatusForbidden)
+		return
+	}
+	w.WriteHeader(http.StatusAccepted)
+}
+
+// processPBFTVote는 Pre-Prepare보다 먼저 도착한 투표를 버리지 않고 보관하며,
+// ECDSA 검증은 뷰 잠금 밖에서 수행한 뒤 상태가 바뀌지 않았는지 다시 확인한다.
+func processPBFTVote(msg bftVoteMessage, phase int32) error {
 	vs := getOrCreateView(msg.View)
 	vs.mu.Lock()
+	if vs.Block.BlockHash == "" {
+		if phase == PhasePrepare {
+			vs.PendingPrepare = append(vs.PendingPrepare, msg)
+		} else {
+			vs.PendingCommit = append(vs.PendingCommit, msg)
+		}
+		vs.mu.Unlock()
+		return nil
+	}
+	if phase == PhaseCommit && vs.Phase < PhaseCommit {
+		vs.PendingCommit = append(vs.PendingCommit, msg)
+		vs.mu.Unlock()
+		return nil
+	}
+	block := vs.Block
+	leader := vs.Leader
+	participants := append([]string(nil), vs.Participants...)
+	vs.mu.Unlock()
+
+	if !verifyPBFTVote(msg, phase, block, leader, participants) {
+		return fmt.Errorf("PBFT %d단계 투표 서명이 유효하지 않습니다", phase)
+	}
+
+	vs.mu.Lock()
 	defer vs.mu.Unlock()
-
-	if vs.Block.BlockHash != msg.Hash {
-		return
+	if vs.Block.BlockHash != block.BlockHash || vs.Leader != leader || !sameStringList(vs.Participants, participants) {
+		return fmt.Errorf("투표 검증 중 PBFT 뷰 상태가 변경되었습니다")
 	}
-
-	var pub string
-	var ok bool
-	if msg.Addr == self {
-		pub, ok = getMeta("meta_hos_pubkey")
+	collector := vs.Prepare
+	if phase == PhaseCommit {
+		collector = vs.Commit
+	}
+	if collector.add(msg.Addr, msg.Sig) {
+		vs.LastProgress = time.Now()
+	}
+	if phase == PhasePrepare {
+		advancePBFTToCommit(vs, msg.View)
 	} else {
-		pub, ok = peerPubKeys[msg.Addr]
+		finalizePBFTIfReady(vs, msg.View)
 	}
+	return nil
+}
 
-	if !ok {
-		return
+func processBufferedPBFTVotes(vs *viewState, view int, prepares, commits []bftVoteMessage) {
+	for _, vote := range prepares {
+		if err := processPBFTVote(vote, PhasePrepare); err != nil {
+			log.Printf("[PBFT][PREPARE 보관 투표 거부] 뷰=%d: %v", view, err)
+		}
 	}
-	hashBytes, _ := hex.DecodeString(msg.Hash)
-	if !verifyECDSA(pub, hashBytes, msg.Sig) {
-		return
-	}
-
-	if !vs.Commit.add(msg.Addr, msg.Sig) {
-		return
-	}
-
-	// 최종 확정 및 저장
-	if vs.Commit.count() >= quorumSize() && !vs.Finalized {
-		vs.Finalized = true
-		vs.Phase = PhaseFinal
-		vs.Block.Signatures = vs.Commit.all()
-
-		log.Printf("[PBFT][FINALIZED] View %d Finalized. Saving to DB...", msg.View)
-
-		// [중요] 체인 저장 함수 호출
-		onBlockReceived(vs.Block)
-
-		deleteView(msg.View)
+	for _, vote := range commits {
+		if err := processPBFTVote(vote, PhaseCommit); err != nil {
+			log.Printf("[PBFT][COMMIT 보관 투표 거부] 뷰=%d: %v", view, err)
+		}
 	}
 }
 
-func broadcast(path string, data any) {
-	body, _ := json.Marshal(data)
-	nodes := append(peersSnapshot(), self)
-	for _, node := range nodes {
-		go http.Post("http://"+node+path, "application/json", bytes.NewReader(body))
+// retryPBFTConsensus는 일시적인 전송 실패로 합의가 영구 정지하지 않도록
+// 동일한 서명 제안을 재전파한다. 수신 노드는 현재 단계의 투표만 다시 보낸다.
+func retryPBFTConsensus() {
+	height, ok := getLatestHeight()
+	if !ok {
+		return
+	}
+	vs := getOrCreateView(height + 1)
+	vs.mu.Lock()
+	if vs.Finalized || vs.Proposal.Block.BlockHash == "" || time.Since(vs.LastProgress) < PBFTProgressTimeout {
+		vs.mu.Unlock()
+		return
+	}
+	proposal := vs.Proposal
+	participants := append([]string(nil), vs.Participants...)
+	vs.LastProgress = time.Now()
+	vs.mu.Unlock()
+	log.Printf("[PBFT][재전송] 뷰=%d에서 진행이 없어 서명된 Pre-Prepare를 다시 전파합니다.", proposal.View)
+	broadcast("/bft/start", proposal, participants)
+}
+
+// advancePBFTToCommit은 Prepare 정족수가 충족된 경우 한 번만 Commit 투표를 시작한다.
+func advancePBFTToCommit(vs *viewState, view int) {
+	if vs.Prepare.count() < quorumSizeFor(len(vs.Participants)) || vs.Phase != PhasePrepare {
+		return
+	}
+	vs.Phase = PhaseCommit
+	privateKey, ok := getMeta("meta_hos_privkey")
+	if !ok {
+		log.Printf("[PBFT][COMMIT 오류] 노드 개인키가 없습니다")
+		return
+	}
+	signature := signPBFTVote(privateKey, vs.Block.HosID, view, PhaseCommit, vs.Block.BlockHash, vs.Leader, vs.Participants)
+	vs.Commit.add(self, signature)
+	pendingCommit := append([]bftVoteMessage(nil), vs.PendingCommit...)
+	vs.PendingCommit = nil
+	log.Printf("[PBFT][COMMIT] Prepare 정족수 충족. 뷰 %d의 Commit을 전파합니다.", view)
+	broadcast("/bft/commit", bftVoteMessage{View: view, Addr: self, Sig: signature, Hash: vs.Block.BlockHash}, vs.Participants)
+	finalizePBFTIfReady(vs, view)
+	if len(pendingCommit) > 0 {
+		go processBufferedPBFTVotes(vs, view, nil, pendingCommit)
+	}
+}
+
+// finalizePBFTIfReady는 Commit 정족수가 충족된 블록을 한 번만 확정하고 저장한다.
+func finalizePBFTIfReady(vs *viewState, view int) {
+	if vs.Commit.count() >= quorumSizeFor(len(vs.Participants)) && !vs.Finalized {
+		vs.Finalized = true
+		vs.Phase = PhaseFinal
+		commitVotes := vs.Commit.signedVotes()
+		vs.Block.Signatures = make([]string, 0, len(commitVotes))
+		for _, vote := range commitVotes {
+			vs.Block.Signatures = append(vs.Block.Signatures, vote.Signature)
+		}
+		vs.Block.PBFT = &PBFTProof{
+			View: view, Leader: vs.Leader,
+			Participants: append([]string(nil), vs.Participants...), CommitVotes: commitVotes,
+		}
+		vs.Block.Elapsed = float32(time.Since(vs.StartedAt).Seconds())
+
+		log.Printf("[PBFT][FINALIZED] View %d Finalized. Saving to DB...", view)
+
+		// [중요] 체인 저장 함수 호출
+		if err := onVerifiedBlockReceived(vs.Block); err != nil {
+			log.Printf("[PBFT][FINALIZED 오류] 뷰=%d 블록 저장 실패: %v", view, err)
+			vs.Finalized = false
+			vs.Phase = PhaseCommit
+			vs.LastProgress = time.Now()
+			return
+		}
+
+		deleteView(view)
+	}
+}
+
+func broadcast(path string, data any, participants []string) {
+	body, err := json.Marshal(data)
+	if err != nil {
+		log.Printf("[PBFT][직렬화 오류] %s 메시지 생성 실패: %v", path, err)
+		return
+	}
+	for _, node := range participants {
+		node := node
+		go func() {
+			response, err := pbftHTTPClient.Post("http://"+node+path, "application/json", bytes.NewReader(body))
+			if err != nil {
+				log.Printf("[PBFT][네트워크 오류] %s%s 전송 실패: %v", node, path, err)
+				return
+			}
+			defer response.Body.Close()
+			_, _ = io.Copy(io.Discard, response.Body)
+			if response.StatusCode < 200 || response.StatusCode >= 300 {
+				log.Printf("[PBFT][네트워크 오류] %s%s 응답 상태=%d", node, path, response.StatusCode)
+			}
+		}()
 	}
 }

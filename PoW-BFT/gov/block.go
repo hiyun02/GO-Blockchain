@@ -17,16 +17,17 @@ import (
 // --------------------------------------------------
 // - 하나의 UpperBlock은 여러 Hos 체인들의 루트(anchor)를 포함
 type UpperBlock struct {
-	Index      int            `json:"index"`       // 블록 번호
-	GovID      string         `json:"gov_id"`      // Gov 체인 식별자
-	PrevHash   string         `json:"prev_hash"`   // 이전 블록의 해시
-	Timestamp  string         `json:"timestamp"`   // 생성 시간 (RFC3339 형식)
-	Records    []AnchorRecord `json:"records"`     // Hos 체인에서 제출한 AnchorRecord 목록
-	MerkleRoot string         `json:"merkle_root"` // AnchorRecords 속 MerkleRoot들을 병합하여 계산한 상위 MerkleRoot
-	Nonce      uint64         `json:"nonce"`       // PoW용 Nonce (0 ~ 2^64-1)
-	Difficulty int            `json:"difficulty"`  // 난이도
-	BlockHash  string         `json:"block_hash"`  // 블록 전체 해시
-	Elapsed    float32        `json:"elapsed"`     // 채굴 소요 시간
+	Index             int            `json:"index"`                        // 블록 번호
+	GovID             string         `json:"gov_id"`                       // Gov 체인 식별자
+	PrevHash          string         `json:"prev_hash"`                    // 이전 블록의 해시
+	Timestamp         string         `json:"timestamp"`                    // 생성 시간 (RFC3339 형식)
+	Records           []AnchorRecord `json:"records"`                      // Hos 체인에서 제출한 AnchorRecord 목록
+	MerkleRoot        string         `json:"merkle_root"`                  // AnchorRecords 속 MerkleRoot들을 병합하여 계산한 상위 MerkleRoot
+	ConfigurationHash string         `json:"configuration_hash,omitempty"` // 대표 변경 정보 해시
+	Nonce             uint64         `json:"nonce"`                        // PoW용 Nonce (0 ~ 2^64-1)
+	Difficulty        int            `json:"difficulty"`                   // 난이도
+	BlockHash         string         `json:"block_hash"`                   // 블록 전체 해시
+	Elapsed           float32        `json:"elapsed"`                      // 채굴 소요 시간
 }
 
 // 제네시스 블록 생성

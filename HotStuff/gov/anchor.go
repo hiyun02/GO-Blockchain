@@ -270,6 +270,9 @@ func verifyECDSA(pubPemStr string, hash []byte, sigHex string) bool {
 	if err != nil {
 		return false
 	}
+	if sigStruct.R == nil || sigStruct.S == nil {
+		return false
+	}
 
 	return ecdsa.Verify(pubKey, hash, sigStruct.R, sigStruct.S)
 }

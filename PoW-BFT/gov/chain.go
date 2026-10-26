@@ -89,21 +89,35 @@ func newUpperChain(govID string) (*UpperChain, error) {
 
 // 수신된 블록 검증 및 반영
 func onBlockReceived(ub UpperBlock) error {
-	miningStop.Store(true) // 다른 PoW 중단
+	chainMu.Lock()
+	defer chainMu.Unlock()
+
+	currentHeight, ok := getLatestHeight()
+	if !ok {
+		return fmt.Errorf("latest height is unavailable")
+	}
+	if ub.Index <= currentHeight {
+		existing, err := getBlockByIndex(ub.Index)
+		if err == nil && existing.BlockHash == ub.BlockHash {
+			return nil
+		}
+		return fmt.Errorf("conflicting or stale block at height %d", ub.Index)
+	}
+	if ub.Index != currentHeight+1 {
+		return fmt.Errorf("unexpected block height: current=%d new=%d", currentHeight, ub.Index)
+	}
 
 	// 이전 블록 확인
-	prev, err := getBlockByIndex(ub.Index - 1)
+	prev, err := getBlockByIndex(currentHeight)
 	if err != nil {
 		return fmt.Errorf("load prev: %w", err)
 	}
 
-	// 검증
-	if ub.PrevHash != prev.BlockHash {
-		return fmt.Errorf("invalid prev hash")
+	// 전체 블록 구조와 PoW 헤더를 검증한 뒤에만 로컬 채굴을 중단한다.
+	if err := validateUpperBlock(ub, prev); err != nil {
+		return err
 	}
-	if !validHash(ub.BlockHash, ub.Difficulty) {
-		return fmt.Errorf("invalid PoW hash")
-	}
+	miningStop.Store(true)
 
 	// 체인에 추가
 	if err := saveBlockToDB(ub); err != nil {
@@ -115,6 +129,8 @@ func onBlockReceived(ub UpperBlock) error {
 	if err := setLatestHeight(ub.Index); err != nil {
 		return fmt.Errorf("set height: %w", err)
 	}
+	applyPoWRepresentativeChanges(ub)
+	ch.lastBlockTime = time.Now()
 
 	logInfo("[CHAIN][UPPER] Accepted UpperBlock #%d (%s)", ub.Index, ub.BlockHash[:12])
 	return nil

@@ -7,6 +7,8 @@ import (
 	"time"
 )
 
+const PBFTConsensusVersion = 2
+
 // //////////////////////////////////////////////////////////////////////////////
 // LowerBlock (Hos 체인 블록 구조)
 // ------------------------------------------------------------
@@ -14,34 +16,50 @@ import (
 // 하나의 블록은 여러 ClinicRecord(Entries)를 포함하고,
 // 그 해시들을 기반으로 Merkle Root를 계산하여 블록 헤더에 저장
 // //////////////////////////////////////////////////////////////////////////////
+type PBFTSignature struct {
+	Voter     string `json:"voter"`
+	Signature string `json:"signature"`
+}
+
+// PBFTProof는 당시 참여자 집합과 Commit 단계 서명을 함께 보관하는 합의 증거다.
+type PBFTProof struct {
+	View         int             `json:"view"`
+	Leader       string          `json:"leader"`
+	Participants []string        `json:"participants"`
+	CommitVotes  []PBFTSignature `json:"commit_votes"`
+}
+
 type LowerBlock struct {
-	Index      int            `json:"index"`       // 블록 번호
-	HosID      string         `json:"hos_id"`      // Hos 체인 식별자
-	PrevHash   string         `json:"prev_hash"`   // 이전 블록의 해시
-	Timestamp  string         `json:"timestamp"`   // 생성 시간 (RFC3339Nano 권장)
-	Entries    []ClinicRecord `json:"entries"`     // 블록 내 진료 정보 목록
-	MerkleRoot string         `json:"merkle_root"` // Entries의 해시 기반 머클루트
-	Proposer   string         `json:"proposer"`    // 해당 블록의 합의 집행자
-	Signatures []string       `json:"signatures"`  // 2f+1개 이상의 노드 서명 목록 (합의 증거)
-	BlockHash  string         `json:"block_hash"`  // 블록 전체 해시 (헤더 기준)
-	Elapsed    float32        `json:"elapsed"`     // 소요 시간
-	LeafHashes []string       `json:"leaf_hashes"` // Merkle Proof 재현을 위한 해시값 모음
+	Index            int            `json:"index"`                       // 블록 번호
+	HosID            string         `json:"hos_id"`                      // Hos 체인 식별자
+	PrevHash         string         `json:"prev_hash"`                   // 이전 블록의 해시
+	Timestamp        string         `json:"timestamp"`                   // 생성 시간 (RFC3339Nano 권장)
+	Entries          []ClinicRecord `json:"entries"`                     // 블록 내 진료 정보 목록
+	MerkleRoot       string         `json:"merkle_root"`                 // Entries의 해시 기반 머클루트
+	Proposer         string         `json:"proposer"`                    // 해당 블록의 합의 집행자
+	ConsensusVersion int            `json:"consensus_version,omitempty"` // PBFT 합의 증거 형식 버전
+	Signatures       []string       `json:"signatures"`                  // n-f개 이상의 노드 서명 목록 (합의 증거)
+	PBFT             *PBFTProof     `json:"pbft,omitempty"`              // 서명자와 참여자 집합을 포함한 PBFT 합의 증거
+	BlockHash        string         `json:"block_hash"`                  // 블록 전체 해시 (헤더 기준)
+	Elapsed          float32        `json:"elapsed"`                     // 소요 시간
+	LeafHashes       []string       `json:"leaf_hashes"`                 // Merkle Proof 재현을 위한 해시값 모음
 }
 
 // 제네시스 블록 생성
 func createGenesisBlock(hosID string) LowerBlock {
 	log.Printf("[Blk] Start genesis block...")
 	genesis := LowerBlock{
-		Index:      0,
-		HosID:      hosID,
-		PrevHash:   strings.Repeat("0", 64),
-		Timestamp:  "2026-01-21 T01:07:18Z",
-		Entries:    []ClinicRecord{},
-		MerkleRoot: "",
-		Proposer:   "SYSTEM",   // 제네시스는 시스템에 의해 생성됨
-		Signatures: []string{}, // 제네시스는 투표 절차 생략
-		Elapsed:    0,
-		LeafHashes: []string{},
+		Index:            0,
+		HosID:            hosID,
+		PrevHash:         strings.Repeat("0", 64),
+		Timestamp:        "2026-01-21 T01:07:18Z",
+		Entries:          []ClinicRecord{},
+		MerkleRoot:       "",
+		Proposer:         "SYSTEM", // 제네시스는 시스템에 의해 생성됨
+		ConsensusVersion: PBFTConsensusVersion,
+		Signatures:       []string{}, // 제네시스는 투표 절차 생략
+		Elapsed:          0,
+		LeafHashes:       []string{},
 	}
 	genesis.BlockHash = genesis.computeHash()
 	log.Printf("[Blk] Start genesis block...")
@@ -50,20 +68,34 @@ func createGenesisBlock(hosID string) LowerBlock {
 
 // 블록의 식별자인 Hash 값 계산
 func (b LowerBlock) computeHash() string {
+	// 기존 장부는 consensus_version 필드가 없었으므로 기존 해시 계산 형식을 그대로 사용한다.
+	if b.ConsensusVersion < PBFTConsensusVersion {
+		hdr := struct {
+			Index      int    `json:"index"`
+			HosID      string `json:"hos_id"`
+			PrevHash   string `json:"prev_hash"`
+			Timestamp  string `json:"timestamp"`
+			MerkleRoot string `json:"merkle_root"`
+			Proposer   string `json:"proposer"`
+		}{
+			Index: b.Index, HosID: b.HosID, PrevHash: b.PrevHash,
+			Timestamp: b.Timestamp, MerkleRoot: b.MerkleRoot, Proposer: b.Proposer,
+		}
+		return sha256Hex(jsonCanonical(hdr))
+	}
+
 	hdr := struct {
-		Index      int    `json:"index"`
-		HosID      string `json:"hos_id"`
-		PrevHash   string `json:"prev_hash"`
-		Timestamp  string `json:"timestamp"`
-		MerkleRoot string `json:"merkle_root"`
-		Proposer   string `json:"proposer"`
+		Index            int    `json:"index"`
+		HosID            string `json:"hos_id"`
+		PrevHash         string `json:"prev_hash"`
+		Timestamp        string `json:"timestamp"`
+		MerkleRoot       string `json:"merkle_root"`
+		Proposer         string `json:"proposer"`
+		ConsensusVersion int    `json:"consensus_version"`
 	}{
-		Index:      b.Index,
-		HosID:      b.HosID,
-		PrevHash:   b.PrevHash,
-		Timestamp:  b.Timestamp,
-		MerkleRoot: b.MerkleRoot,
-		Proposer:   b.Proposer,
+		Index: b.Index, HosID: b.HosID, PrevHash: b.PrevHash,
+		Timestamp: b.Timestamp, MerkleRoot: b.MerkleRoot, Proposer: b.Proposer,
+		ConsensusVersion: b.ConsensusVersion,
 	}
 	return sha256Hex(jsonCanonical(hdr))
 }
@@ -74,14 +106,15 @@ func createProposedBlock(entries []ClinicRecord) LowerBlock {
 	prevBlock, _ := getBlockByIndex(height)
 
 	newBlock := LowerBlock{
-		Index:      height + 1,
-		HosID:      selfID(),
-		PrevHash:   prevBlock.BlockHash,
-		Timestamp:  time.Now().UTC().Format(time.RFC3339Nano),
-		Entries:    entries,
-		Proposer:   self,
-		Signatures: []string{},
-		Elapsed:    0,
+		Index:            height + 1,
+		HosID:            selfID(),
+		PrevHash:         prevBlock.BlockHash,
+		Timestamp:        time.Now().UTC().Format(time.RFC3339Nano),
+		Entries:          entries,
+		Proposer:         self,
+		ConsensusVersion: PBFTConsensusVersion,
+		Signatures:       []string{},
+		Elapsed:          0,
 	}
 
 	// Leaf Hash 생성

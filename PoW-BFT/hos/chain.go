@@ -1,7 +1,7 @@
 package main
 
 import (
-	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"sync"
@@ -84,6 +84,16 @@ func newLowerChain(hosID string) (*LowerChain, error) {
 // 합의가 완료된 블록 처리
 // 합의가 완료된 블록 처리 (수정본)
 func onBlockReceived(lb LowerBlock) error {
+	return acceptBlock(lb, false)
+}
+
+// onVerifiedBlockReceived는 현재 뷰에서 Commit 서명을 이미 검증한 결정 블록을 반영한다.
+// P2P 동기화처럼 외부에서 받은 블록은 기본 경로에서 합의 증거를 다시 검증한다.
+func onVerifiedBlockReceived(lb LowerBlock) error {
+	return acceptBlock(lb, true)
+}
+
+func acceptBlock(lb LowerBlock, consensusEvidenceVerified bool) error {
 	chainMu.Lock()
 	defer chainMu.Unlock()
 
@@ -92,6 +102,20 @@ func onBlockReceived(lb LowerBlock) error {
 	if lb.Index <= currentHeight && currentHeight != 0 {
 		log.Printf("[CHAIN] Block #%d already processed. Skipping.", lb.Index)
 		return nil
+	}
+	if lb.Index > 0 {
+		previous, err := getBlockByIndex(currentHeight)
+		if err != nil {
+			return fmt.Errorf("이전 블록 조회 실패: %w", err)
+		}
+		if err := validateLowerBlockStructure(lb, previous); err != nil {
+			return fmt.Errorf("PBFT 결정 블록 구조 검증 실패: %w", err)
+		}
+		if !consensusEvidenceVerified {
+			if err := verifyConsensusEvidence(lb); err != nil {
+				return fmt.Errorf("PBFT 합의 증거 검증 실패: %w", err)
+			}
+		}
 	}
 	// 로컬 장부 반영 (DB 저장)
 	if err := saveBlockToDB(lb); err != nil {
@@ -121,66 +145,73 @@ func onBlockReceived(lb LowerBlock) error {
 	return nil
 }
 
-// 블록 내 2f+1개 이상의 유효한 서명이 있는지 확인
+// 블록에 당시 참여자 중 n-f개 이상의 유효한 Commit 서명이 있는지 확인
 func verifyConsensusEvidence(lb LowerBlock) error {
-	// 1. 정족수 계산
-	peers := peersSnapshot()
-	n := len(peers) + 1 // 피어들 + 나(Self)
-	f := (n - 1) / 3
-	required := 2*f + 1
-
-	// 서명 개수 자체가 부족하면 즉시 리턴
-	if len(lb.Signatures) < required {
-		return fmt.Errorf("insufficient signatures: %d/%d", len(lb.Signatures), required)
+	if lb.ConsensusVersion < PBFTConsensusVersion {
+		return verifyLegacyConsensusEvidence(lb)
 	}
-
-	// 2. 검증할 메시지 해시 생성 (블록 해시 기준)
-	msgHash := sha256.Sum256([]byte(lb.BlockHash))
-
-	validCount := 0
-	checkedPeers := make(map[string]bool) // 동일 노드의 중복 서명 방지용
-
-	// 3. 서명 슬라이스 순회 (여기서 addr은 인덱스 int입니다)
-	for _, sigHex := range lb.Signatures {
-		found := false
-
-		// 내 서명인지 먼저 확인 (가장 빠름)
-		myPubKey, _ := getMeta("meta_hos_pubkey")
-		if !checkedPeers[self] && verifyECDSA(myPubKey, msgHash[:], sigHex) {
-			validCount++
-			checkedPeers[self] = true
-			found = true
+	if lb.ConsensusVersion != PBFTConsensusVersion {
+		return fmt.Errorf("지원하지 않는 PBFT 합의 버전입니다: %d", lb.ConsensusVersion)
+	}
+	if lb.PBFT == nil {
+		return fmt.Errorf("PBFT 합의 증거가 없습니다")
+	}
+	proof := lb.PBFT
+	if proof.View != lb.Index || proof.Leader != lb.Proposer || !isSortedUnique(proof.Participants) ||
+		!containsParticipant(proof.Participants, proof.Leader) {
+		return fmt.Errorf("PBFT 뷰, 리더 또는 참여자 스냅샷이 올바르지 않습니다")
+	}
+	required := quorumSizeFor(len(proof.Participants))
+	if len(proof.CommitVotes) < required {
+		return fmt.Errorf("PBFT Commit 서명 부족: %d/%d", len(proof.CommitVotes), required)
+	}
+	digest := pbftVoteDigest(lb.HosID, proof.View, PhaseCommit, lb.BlockHash, proof.Leader, proof.Participants)
+	seen := make(map[string]bool, len(proof.CommitVotes))
+	for _, vote := range proof.CommitVotes {
+		if seen[vote.Voter] || !containsParticipant(proof.Participants, vote.Voter) {
+			return fmt.Errorf("중복되었거나 참여자가 아닌 PBFT Commit 서명자: %s", vote.Voter)
 		}
+		seen[vote.Voter] = true
+		publicKey, ok := pbftPublicKeyFor(vote.Voter)
+		if !ok || !verifyECDSA(publicKey, digest, vote.Signature) {
+			return fmt.Errorf("서명자 %s의 PBFT Commit 서명이 유효하지 않습니다", vote.Voter)
+		}
+	}
+	log.Printf("[PBFT][검증] 블록 #%d의 Commit 서명 %d개를 확인했습니다. (정족수=%d)", lb.Index, len(proof.CommitVotes), required)
+	return nil
+}
 
-		// 내 서명이 아니라면 피어들 명단에서 대조
-		if !found {
-			for _, pAddr := range peers {
-				if checkedPeers[pAddr] {
-					continue // 이미 검증 완료된 피어는 스킵
-				}
-
-				pubPem := peerPubKeys[pAddr]
-				if pubPem == "" {
-					continue
-				}
-
-				// ECDSA 대조 연산 (CPU 집약적)
-				if verifyECDSA(pubPem, msgHash[:], sigHex) {
-					validCount++
-					checkedPeers[pAddr] = true
-					found = true
-					break // 이 서명의 주인을 찾았으므로 다음 서명으로
-				}
+// verifyLegacyConsensusEvidence는 업그레이드 전에 생성된 블록의 기존 서명 형식을 검증한다.
+// 새 합의 제안에는 사용할 수 없으며, 버전 2 블록이 등장한 뒤에는 구조 검증에서 하위 버전을 거부한다.
+func verifyLegacyConsensusEvidence(lb LowerBlock) error {
+	participants := consensusParticipants()
+	required := quorumSizeFor(len(participants))
+	if len(lb.Signatures) < required {
+		return fmt.Errorf("기존 PBFT 서명 부족: %d/%d", len(lb.Signatures), required)
+	}
+	digest, err := hex.DecodeString(lb.BlockHash)
+	if err != nil || len(digest) == 0 {
+		return fmt.Errorf("기존 PBFT 블록 해시가 올바르지 않습니다: %q", lb.BlockHash)
+	}
+	used := make(map[string]bool, len(participants))
+	valid := 0
+	for _, signature := range lb.Signatures {
+		for _, participant := range participants {
+			if used[participant] {
+				continue
+			}
+			publicKey, ok := pbftPublicKeyFor(participant)
+			if ok && verifyECDSA(publicKey, digest, signature) {
+				used[participant] = true
+				valid++
+				break
 			}
 		}
 	}
-
-	// 4. 유효 정족수 최종 확인
-	if validCount < required {
-		return fmt.Errorf("valid signatures insufficient: %d/%d (required %d)", validCount, required, required)
+	if valid < required {
+		return fmt.Errorf("기존 PBFT 유효 서명 부족: %d/%d", valid, required)
 	}
-
-	log.Printf("[BFT] Block #%d verified with %d valid signatures", lb.Index, validCount)
+	log.Printf("[PBFT][기존 형식 검증] 블록 #%d의 서명 %d개를 확인했습니다. (정족수=%d)", lb.Index, valid, required)
 	return nil
 }
 

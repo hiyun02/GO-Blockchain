@@ -58,11 +58,48 @@ type ContractData struct {
 ////////////////////////////////////////////////////////////////////////////////
 
 type AnchorRecord struct {
-	HosID            string       `json:"hos_id"`            // 진료 정보 제공자 ID
-	ContractSnapshot ContractData `json:"contract_snapshot"` // 계약 상태 스냅샷
-	LowerRoot        string       `json:"lower_root"`        // Hos 체인에서 전달된 머클 루트 (서명 포함)
-	AccessCatalog    []string     `json:"access_catalog"`    // 접근 가능한 진료 정보 리스트
-	AnchorTimestamp  string       `json:"anchor_ts"`         // 앵커가 제출된 시간
+	HosID            string                   `json:"hos_id"`                   // 진료 정보 제공자 ID
+	ContractSnapshot ContractData             `json:"contract_snapshot"`        // 계약 상태 스냅샷
+	LowerRoot        string                   `json:"lower_root"`               // Hos 체인에서 전달된 머클 루트 (서명 포함)
+	AccessCatalog    []string                 `json:"access_catalog"`           // 접근 가능한 진료 정보 리스트
+	AnchorTimestamp  string                   `json:"anchor_ts"`                // 앵커가 제출된 시간
+	Representative   *PoWRepresentativeChange `json:"representative,omitempty"` // 다음 Gov PoW부터 참여할 Hos 리더 정보
+}
+
+type PoWRepresentative struct {
+	HosID            string `json:"hos_id"`
+	LeaderAddr       string `json:"leader_addr"`
+	Endpoint         string `json:"gov_endpoint"`
+	LeadershipTerm   uint64 `json:"leadership_term"`
+	LowerHeight      int    `json:"lower_height"`
+	LowerBlockHash   string `json:"lower_block_hash"`
+	ActivationHeight int    `json:"activation_height"`
+	RegisteredAt     string `json:"registered_at"`
+}
+
+type PoWRepresentativeChange struct {
+	Action                 string            `json:"action"`
+	Representative         PoWRepresentative `json:"representative"`
+	HosLeaderPublicKey     string            `json:"hos_leader_public_key"`
+	AuthorizationSignature string            `json:"authorization_signature"`
+}
+
+type GovAnchorSubmission struct {
+	HosID          string `json:"hos_id"`
+	HosBoot        string `json:"hos_boot"`
+	Root           string `json:"root"`
+	Ts             string `json:"ts"`
+	Sig            string `json:"sig"`
+	LowerHeight    int    `json:"lower_height"`
+	LowerBlockHash string `json:"lower_block_hash"`
+	GovEndpoint    string `json:"gov_endpoint"`
+	LeadershipTerm uint64 `json:"leadership_term"`
+}
+
+type PoWMiningRequest struct {
+	Anchors      []AnchorRecord `json:"anchors"`
+	Participants []string       `json:"participants"`
+	Difficulty   int            `json:"difficulty"`
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -75,13 +112,15 @@ type AnchorRecord struct {
 ////////////////////////////////////////////////////////////////////////////////
 
 type UpperBlock struct {
-	Index      int            `json:"index"`       // 블록 번호
-	GovID      string         `json:"gov_id"`      // Gov 체인 식별자
-	PrevHash   string         `json:"prev_hash"`   // 이전 블록의 해시
-	Timestamp  string         `json:"timestamp"`   // 생성 시간 (RFC3339 형식)
-	Records    []AnchorRecord `json:"records"`     // Hos 체인에서 제출한 AnchorRecord 목록
-	MerkleRoot string         `json:"merkle_root"` // AnchorRecords 속 MerkleRoot들을 병합하여 계산한 상위 MerkleRoot
-	Nonce      uint64         `json:"nonce"`       // PoW용 Nonce (0 ~ 2^64-1)
-	Difficulty int            `json:"difficulty"`  // 난이도
-	BlockHash  string         `json:"block_hash"`  // 블록 전체 해시
+	Index             int            `json:"index"`                        // 블록 번호
+	GovID             string         `json:"gov_id"`                       // Gov 체인 식별자
+	PrevHash          string         `json:"prev_hash"`                    // 이전 블록의 해시
+	Timestamp         string         `json:"timestamp"`                    // 생성 시간 (RFC3339 형식)
+	Records           []AnchorRecord `json:"records"`                      // Hos 체인에서 제출한 AnchorRecord 목록
+	MerkleRoot        string         `json:"merkle_root"`                  // AnchorRecords 속 MerkleRoot들을 병합하여 계산한 상위 MerkleRoot
+	ConfigurationHash string         `json:"configuration_hash,omitempty"` // 대표 변경 정보 해시
+	Nonce             uint64         `json:"nonce"`                        // PoW용 Nonce (0 ~ 2^64-1)
+	Difficulty        int            `json:"difficulty"`                   // 난이도
+	BlockHash         string         `json:"block_hash"`                   // 블록 전체 해시
+	Elapsed           float32        `json:"elapsed"`                      // 채굴 소요 시간
 }

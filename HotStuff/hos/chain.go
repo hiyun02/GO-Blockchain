@@ -83,6 +83,16 @@ func newLowerChain(hosID string) (*LowerChain, error) {
 // 합의가 완료된 블록 처리
 // 합의가 완료된 블록 처리 (수정본)
 func onBlockReceived(lb LowerBlock) error {
+	return acceptBlock(lb, false)
+}
+
+// onVerifiedBlockReceived는 현재 뷰에서 단계별 QC를 이미 검증한 결정 블록을 반영한다.
+// P2P 동기화처럼 외부에서 받은 블록은 이 함수를 사용하지 않고 합의 증거를 다시 검증해야 한다.
+func onVerifiedBlockReceived(lb LowerBlock) error {
+	return acceptBlock(lb, true)
+}
+
+func acceptBlock(lb LowerBlock, consensusEvidenceVerified bool) error {
 	chainMu.Lock()
 	defer chainMu.Unlock()
 
@@ -100,8 +110,10 @@ func onBlockReceived(lb LowerBlock) error {
 		if err := validateLowerBlock(lb, prev); err != nil {
 			return fmt.Errorf("HotStuff 결정 블록 구조 검증 실패: %w", err)
 		}
-		if err := verifyConsensusEvidence(lb); err != nil {
-			return fmt.Errorf("HotStuff 합의 증거 검증 실패: %w", err)
+		if !consensusEvidenceVerified {
+			if err := verifyConsensusEvidence(lb); err != nil {
+				return fmt.Errorf("HotStuff 합의 증거 검증 실패: %w", err)
+			}
 		}
 	}
 	// 로컬 장부 반영 (DB 저장)
@@ -160,6 +172,16 @@ func verifyConsensusEvidence(lb LowerBlock) error {
 	}
 	if !(proof.PrepareQC.View == proof.PreCommitQC.View && proof.PreCommitQC.View == proof.CommitQC.View) {
 		return fmt.Errorf("QC 뷰 번호가 서로 다릅니다")
+	}
+	if proof.View != proof.CommitQC.View {
+		return fmt.Errorf("HotStuff 증거의 뷰와 QC 뷰가 다릅니다")
+	}
+	if proof.PrepareQC.Leader != proof.PreCommitQC.Leader || proof.PreCommitQC.Leader != proof.CommitQC.Leader {
+		return fmt.Errorf("QC 리더가 단계별로 다릅니다")
+	}
+	if !sameStringList(proof.PrepareQC.Participants, proof.PreCommitQC.Participants) ||
+		!sameStringList(proof.PreCommitQC.Participants, proof.CommitQC.Participants) {
+		return fmt.Errorf("QC 참여자 스냅샷이 단계별로 다릅니다")
 	}
 	log.Printf("[HotStuff][검증] 블록 #%d의 3단계 QC가 모두 유효합니다. (뷰=%d, Commit 서명=%d)",
 		lb.Index, proof.CommitQC.View, len(proof.CommitQC.Signatures))

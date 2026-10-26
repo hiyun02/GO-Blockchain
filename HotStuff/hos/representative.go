@@ -83,10 +83,12 @@ type GovAnchorSubmission struct {
 
 type govHotStuffProposal struct {
 	View         uint64                `json:"view"`
+	Round        uint64                `json:"round"`
 	Leader       string                `json:"leader"`
 	Block        UpperBlock            `json:"block"`
 	Participants []string              `json:"participants"`
 	Justify      *GovQuorumCertificate `json:"justify_qc,omitempty"`
+	Signature    string                `json:"signature"`
 }
 
 type govHotStuffVote struct {
@@ -100,7 +102,7 @@ type govHotStuffVote struct {
 type govHotStuffQCEnvelope struct {
 	View         uint64                 `json:"view"`
 	Leader       string                 `json:"leader"`
-	Block        UpperBlock             `json:"block"`
+	BlockHash    string                 `json:"block_hash"`
 	Certificates []GovQuorumCertificate `json:"certificates"`
 }
 
@@ -115,6 +117,18 @@ func govAnchorSubmissionDigest(req GovAnchorSubmission) []byte {
 func govVoteDigest(govID string, view uint64, phase GovHotStuffPhase, blockHash, leader string, participants []string) []byte {
 	membership := sha256.Sum256([]byte(strings.Join(participants, "\x00")))
 	payload := fmt.Sprintf("HOTSTUFF|v1|%s|%d|%s|%s|%s|%x", govID, view, phase, blockHash, leader, membership)
+	sum := sha256.Sum256([]byte(payload))
+	return sum[:]
+}
+
+func govProposalDigest(proposal govHotStuffProposal) []byte {
+	membership := sha256.Sum256([]byte(strings.Join(proposal.Participants, "\x00")))
+	justify := ""
+	if proposal.Justify != nil {
+		justify = fmt.Sprintf("%d|%s|%s", proposal.Justify.View, proposal.Justify.Phase, proposal.Justify.BlockHash)
+	}
+	payload := fmt.Sprintf("HOTSTUFF-PROPOSAL|v1|%s|%d|%d|%s|%s|%x|%s",
+		proposal.Block.GovID, proposal.View, proposal.Round, proposal.Block.BlockHash, proposal.Leader, membership, justify)
 	sum := sha256.Sum256([]byte(payload))
 	return sum[:]
 }
@@ -324,6 +338,12 @@ func verifyGovQC(qc GovQuorumCertificate, govID string, keys map[string]string) 
 	if qc.View == 0 || qc.BlockHash == "" || qc.Leader == "" || !isSortedUnique(qc.Participants) {
 		return fmt.Errorf("Gov QC 필수 정보가 올바르지 않습니다")
 	}
+	if qc.Phase != GovPhasePrepare && qc.Phase != GovPhasePreCommit && qc.Phase != GovPhaseCommit {
+		return fmt.Errorf("알 수 없는 Gov QC 단계입니다: %s", qc.Phase)
+	}
+	if !containsString(qc.Participants, qc.Leader) {
+		return fmt.Errorf("Gov QC 리더가 참여자 스냅샷에 없습니다")
+	}
 	required := quorumSizeFor(len(qc.Participants))
 	if len(qc.Signatures) < required {
 		return fmt.Errorf("Gov QC 서명 부족: %d/%d", len(qc.Signatures), required)
@@ -340,6 +360,78 @@ func verifyGovQC(qc GovQuorumCertificate, govID string, keys map[string]string) 
 		}
 	}
 	return nil
+}
+
+// verifyGovConsensusEvidence는 Gov 동기화 블록의 3단계 QC와 단계 간 연결을 검증한다.
+func verifyGovConsensusEvidence(block UpperBlock, govID string, keys map[string]string) error {
+	if block.HotStuff == nil {
+		return fmt.Errorf("Gov HotStuff 합의 증거가 없습니다")
+	}
+	proof := block.HotStuff
+	checks := []struct {
+		phase GovHotStuffPhase
+		qc    GovQuorumCertificate
+	}{
+		{GovPhasePrepare, proof.PrepareQC},
+		{GovPhasePreCommit, proof.PreCommitQC},
+		{GovPhaseCommit, proof.CommitQC},
+	}
+	for _, check := range checks {
+		if check.qc.Phase != check.phase || check.qc.BlockHash != block.BlockHash {
+			return fmt.Errorf("Gov %s QC가 블록과 일치하지 않습니다", check.phase)
+		}
+		if err := verifyGovQC(check.qc, govID, keys); err != nil {
+			return fmt.Errorf("Gov %s QC 검증 실패: %w", check.phase, err)
+		}
+	}
+	if proof.View != proof.CommitQC.View || proof.PrepareQC.View != proof.PreCommitQC.View ||
+		proof.PreCommitQC.View != proof.CommitQC.View {
+		return fmt.Errorf("Gov HotStuff 증거의 뷰가 단계별로 다릅니다")
+	}
+	if proof.PrepareQC.Leader != proof.PreCommitQC.Leader || proof.PreCommitQC.Leader != proof.CommitQC.Leader {
+		return fmt.Errorf("Gov QC 리더가 단계별로 다릅니다")
+	}
+	if !sameOrderedStrings(proof.PrepareQC.Participants, proof.PreCommitQC.Participants) ||
+		!sameOrderedStrings(proof.PreCommitQC.Participants, proof.CommitQC.Participants) {
+		return fmt.Errorf("Gov QC 참여자 스냅샷이 단계별로 다릅니다")
+	}
+	return nil
+}
+
+// acceptGovViewQC는 Hos 대표가 처음 받은 Gov QC만 검증하고 이전에 검증한 QC는 보관본을 재사용한다.
+func acceptGovViewQC(viewState *govRepresentativeView, qc GovQuorumCertificate, govID string, keys map[string]string) (GovQuorumCertificate, error) {
+	proposal := viewState.Proposal
+	if qc.View != proposal.View || qc.BlockHash != proposal.Block.BlockHash {
+		return GovQuorumCertificate{}, fmt.Errorf("Gov QC 뷰 또는 블록 해시가 현재 제안과 다릅니다")
+	}
+	if qc.Leader != proposal.Leader || !sameOrderedStrings(qc.Participants, proposal.Participants) {
+		return GovQuorumCertificate{}, fmt.Errorf("Gov QC 리더 또는 참여자 스냅샷이 제안과 다릅니다")
+	}
+	if stored, ok := viewState.Certificates[qc.Phase]; ok {
+		if stored.View != qc.View || stored.BlockHash != qc.BlockHash || stored.Leader != qc.Leader ||
+			!sameOrderedStrings(stored.Participants, qc.Participants) {
+			return GovQuorumCertificate{}, fmt.Errorf("이미 검증한 %s Gov QC와 수신 QC가 다릅니다", qc.Phase)
+		}
+		return stored, nil
+	}
+	if qc.Phase == GovPhasePreCommit {
+		if _, ok := viewState.Certificates[GovPhasePrepare]; !ok {
+			return GovQuorumCertificate{}, fmt.Errorf("Gov Prepare QC보다 Pre-Commit QC가 먼저 도착했습니다")
+		}
+	}
+	if qc.Phase == GovPhaseCommit {
+		if _, ok := viewState.Certificates[GovPhasePrepare]; !ok {
+			return GovQuorumCertificate{}, fmt.Errorf("Gov Prepare QC 없이 Commit QC를 처리할 수 없습니다")
+		}
+		if _, ok := viewState.Certificates[GovPhasePreCommit]; !ok {
+			return GovQuorumCertificate{}, fmt.Errorf("Gov Pre-Commit QC 없이 Commit QC를 처리할 수 없습니다")
+		}
+	}
+	if err := verifyGovQC(qc, govID, keys); err != nil {
+		return GovQuorumCertificate{}, err
+	}
+	viewState.Certificates[qc.Phase] = qc
+	return qc, nil
 }
 
 func recordGovRepresentativeVote(view uint64, phase GovHotStuffPhase, blockHash string) bool {
@@ -398,7 +490,14 @@ func handleGovHotStuffProposal(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "현재 Hos 리더가 Gov 검증자 집합에 없습니다", http.StatusForbidden)
 		return
 	}
-	if err := refreshGovValidatorSet(proposal.Leader); err != nil {
+	// 제안자가 알려 준 주소를 신뢰 기준으로 삼지 않고, 설정된 Gov 부트노드에서 검증자 스냅샷을 받는다.
+	validatorSource := strings.TrimRight(govBoot, "/")
+	if validatorSource == "" {
+		govRepRuntime.mu.RLock()
+		validatorSource = govRepRuntime.Leader
+		govRepRuntime.mu.RUnlock()
+	}
+	if err := refreshGovValidatorSet(validatorSource); err != nil {
 		http.Error(w, "Gov 검증자 집합 조회 실패: "+err.Error(), http.StatusBadGateway)
 		return
 	}
@@ -406,9 +505,19 @@ func handleGovHotStuffProposal(w http.ResponseWriter, r *http.Request) {
 	participants := append([]string(nil), govRepRuntime.Participants...)
 	keys := copyStringMap(govRepRuntime.PublicKeys)
 	govID := govRepRuntime.GovID
+	initialLeader := govRepRuntime.Leader
 	govRepRuntime.mu.RUnlock()
 	if proposal.Block.GovID != govID || !sameOrderedStrings(proposal.Participants, participants) {
 		http.Error(w, "Gov 체인 또는 검증자 집합이 일치하지 않습니다", http.StatusConflict)
+		return
+	}
+	expectedLeader := govHotStuffLeaderForRound(proposal.Participants, initialLeader, proposal.Round)
+	if proposal.Leader != expectedLeader {
+		http.Error(w, fmt.Sprintf("Gov 라운드 %d의 예상 리더(%s)와 제안자가 다릅니다", proposal.Round, expectedLeader), http.StatusForbidden)
+		return
+	}
+	if proposal.Signature == "" || !verifyECDSA(keys[proposal.Leader], govProposalDigest(proposal), proposal.Signature) {
+		http.Error(w, "Gov HotStuff 리더 제안 서명이 유효하지 않습니다", http.StatusForbidden)
 		return
 	}
 	if err := syncGovRepresentativeChain(proposal.Leader); err != nil {
@@ -440,6 +549,27 @@ func handleGovHotStuffProposal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusAccepted)
+}
+
+// govHotStuffLeaderForRound는 Hos 대표를 제외한 Gov 노드 사이에서 라운드 리더를 순서대로 정한다.
+func govHotStuffLeaderForRound(participants []string, initialLeader string, round uint64) string {
+	leaders := make([]string, 0, len(participants))
+	for _, participant := range participants {
+		if !strings.HasSuffix(strings.TrimRight(participant, "/"), "/gov") {
+			leaders = append(leaders, participant)
+		}
+	}
+	if len(leaders) == 0 {
+		return ""
+	}
+	start := 0
+	for i, leader := range leaders {
+		if leader == initialLeader {
+			start = i
+			break
+		}
+	}
+	return leaders[(start+int(round%uint64(len(leaders))))%len(leaders)]
 }
 
 func copyStringMap(source map[string]string) map[string]string {
@@ -522,25 +652,27 @@ func handleGovHotStuffQC(w http.ResponseWriter, r *http.Request) {
 	}
 	viewState.mu.Lock()
 	proposal := viewState.Proposal
-	if envelope.Leader != proposal.Leader || envelope.Block.BlockHash != proposal.Block.BlockHash {
+	if envelope.Leader != proposal.Leader || envelope.BlockHash != proposal.Block.BlockHash {
 		viewState.mu.Unlock()
 		http.Error(w, "Gov QC의 리더 또는 블록이 제안과 다릅니다", http.StatusBadRequest)
 		return
 	}
-	for _, qc := range envelope.Certificates {
+	var lastQC GovQuorumCertificate
+	for _, receivedQC := range envelope.Certificates {
+		qc := receivedQC
 		if qc.View != envelope.View || qc.BlockHash != proposal.Block.BlockHash {
 			viewState.mu.Unlock()
 			http.Error(w, "Gov QC 뷰/블록 해시가 다릅니다", http.StatusBadRequest)
 			return
 		}
-		if err := verifyGovQC(qc, govID, keys); err != nil {
+		trustedQC, err := acceptGovViewQC(viewState, qc, govID, keys)
+		if err != nil {
 			viewState.mu.Unlock()
 			http.Error(w, err.Error(), http.StatusForbidden)
 			return
 		}
-		viewState.Certificates[qc.Phase] = qc
+		lastQC = trustedQC
 	}
-	lastQC := envelope.Certificates[len(envelope.Certificates)-1]
 	if lastQC.Phase == GovPhasePreCommit {
 		copyQC := lastQC
 		govRepRuntime.mu.Lock()
@@ -627,6 +759,10 @@ func syncGovRepresentativeChain(leader string) error {
 		localHeight = -1
 	}
 	added := 0
+	govRepRuntime.mu.RLock()
+	govID := govRepRuntime.GovID
+	keys := copyStringMap(govRepRuntime.PublicKeys)
+	govRepRuntime.mu.RUnlock()
 	for _, block := range page.Items {
 		if block.Index <= localHeight {
 			continue
@@ -637,6 +773,9 @@ func syncGovRepresentativeChain(leader string) error {
 				return err
 			}
 			if err := validateGovUpperBlock(block, previous); err != nil {
+				return err
+			}
+			if err := verifyGovConsensusEvidence(block, govID, keys); err != nil {
 				return err
 			}
 		}

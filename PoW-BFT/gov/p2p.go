@@ -49,16 +49,30 @@ func validateUpperBlock(newBlk, prevBlk UpperBlock) error {
 	if expectedRoot != newBlk.MerkleRoot {
 		return fmt.Errorf("merkle_root mismatch: want=%s got=%s", expectedRoot, newBlk.MerkleRoot)
 	}
-	// 5) BlockHash 재계산
-	blockHash := newBlk.BlockHash
+	// 5) 블록 헤더를 다시 구성하여 실제 PoW 해시와 수신 해시가 같은지 확인
+	header := PoWHeader{
+		Index: newBlk.Index, PrevHash: newBlk.PrevHash, MerkleRoot: newBlk.MerkleRoot,
+		ConfigurationHash: newBlk.ConfigurationHash,
+		Timestamp:         newBlk.Timestamp, Difficulty: newBlk.Difficulty, Nonce: newBlk.Nonce,
+	}
+	blockHash := computeHashForPoW(header)
 	if blockHash != newBlk.BlockHash {
-		return fmt.Errorf("block_hash mismatch")
+		return fmt.Errorf("block_hash mismatch: want=%s got=%s", blockHash, newBlk.BlockHash)
 	}
 
-	// 6) PoW 난이도 검증
-	if !validHash(blockHash, newBlk.Difficulty) {
+	// 6) 비정상 난이도 값과 PoW 조건을 함께 검증
+	if newBlk.Difficulty < 1 || newBlk.Difficulty > sha256HexLength {
+		return fmt.Errorf("invalid PoW difficulty: %d", newBlk.Difficulty)
+	}
+	if !validHash(newBlk.BlockHash, newBlk.Difficulty) {
 		return fmt.Errorf("pow difficulty not satisfied (hash=%s diff=%d)",
-			blockHash, newBlk.Difficulty)
+			newBlk.BlockHash, newBlk.Difficulty)
+	}
+	if newBlk.ConfigurationHash != computePoWRepresentativeChangesHash(newBlk.Records) {
+		return fmt.Errorf("representative configuration hash mismatch")
+	}
+	if err := validatePoWRepresentativeChanges(newBlk.Records, prevBlk.Index); err != nil {
+		return fmt.Errorf("representative change validation failed: %w", err)
 	}
 	return nil
 }
@@ -157,6 +171,7 @@ func syncChain(peer string) {
 			log.Printf("[P2P] setLatestHeight error: %v\n", err)
 			return
 		}
+		applyPoWRepresentativeChanges(nb)
 
 		localH = nb.Index
 		appended++
@@ -353,6 +368,9 @@ func startChainWatcher() {
 		if needReset {
 			log.Printf("[CHAIN-WATCHER] fork/outdated detected → reset + sync from %s", bestPeer)
 			resetLocalDB()
+			powRepresentativeMu.Lock()
+			powRepresentativeMap = make(map[string]PoWRepresentative)
+			powRepresentativeMu.Unlock()
 			syncChain(bestPeer)
 		}
 	}
